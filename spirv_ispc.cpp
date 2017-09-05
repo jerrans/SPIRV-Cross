@@ -1,3 +1,17 @@
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2017, Intel Corporation
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated 
+// documentation files (the "Software"), to deal in the Software without restriction, including without limitation 
+// the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+// permit persons to whom the Software is furnished to do so, subject to the following conditions:
+// The above copyright notice and this permission notice shall be included in all copies or substantial portions of 
+// the Software.
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+// THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, 
+// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE 
+// SOFTWARE.
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////// 
 /*
  * Copyright 2015-2017 ARM Limited
  *
@@ -14,9 +28,15 @@
  * limitations under the License.
  */
 
+
 #include "spirv_ispc.hpp"
 #include "GLSL.std.450.h"
 #include <assert.h>
+#include <algorithm>
+#include <iomanip> // std::put_time
+
+#define PACKED ""
+//#define PACKED "_packed"
 
 using namespace spv;
 using namespace spirv_cross;
@@ -42,7 +62,7 @@ void CompilerISPC::emit_buffer_block(const SPIRVariable &var)
 */
     resource_registrations.push_back(join("uniform struct ", buffer_name, type_to_array_glsl(type), " ", instance_name, ";"));
     resource_entry_arguments.push_back(join("uniform struct ", buffer_name, type_to_array_glsl(type), "& ", instance_name));
-//    resource_entry_arguments_init.push_back(join(instance_name, " = a_", instance_name, ";"));
+    resource_entry_arguments_init.push_back(join(instance_name));
 
 	statement("");
 }
@@ -97,20 +117,19 @@ void CompilerISPC::emit_uniform(const SPIRVariable &var)
 	string type_name = type_to_glsl(type);
 	remap_variable_type_name(type, instance_name, type_name);
 
-	if (type.basetype == SPIRType::Image || type.basetype == SPIRType::SampledImage ||
-	    type.basetype == SPIRType::AtomicCounter)
+	if (type.basetype == SPIRType::AtomicCounter)
 	{
 		statement("internal::Resource<", type_name, type_to_array_glsl(type), "> ", instance_name, "__;");
-		statement_no_indent("#define ", instance_name, " __res->", instance_name, "__.get()");
-		resource_registrations.push_back(
-		    join("s.register_resource(", instance_name, "__", ", ", descriptor_set, ", ", binding, ");"));
+//		statement_no_indent("#define ", instance_name, " __res->", instance_name, "__.get()");
+//		resource_registrations.push_back(
+//		    join("s.register_resource(", instance_name, "__", ", ", descriptor_set, ", ", binding, ");"));
 	}
 	else
 	{
-		statement("internal::UniformConstant<", type_name, type_to_array_glsl(type), "> ", instance_name, "__;");
-		statement_no_indent("#define ", instance_name, " __res->", instance_name, "__.get()");
-		resource_registrations.push_back(
-		    join("s.register_uniform_constant(", instance_name, "__", ", ", location, ");"));
+		statement("//unsupported internal::UniformConstant<", type_name, type_to_array_glsl(type), "> ", instance_name, "__;");
+//		statement_no_indent("#define ", instance_name, " __res->", instance_name, "__.get()");
+//		resource_registrations.push_back(
+//		    join("s.register_uniform_constant(", instance_name, "__", ", ", location, ");"));
 	}
 
 	statement("");
@@ -152,7 +171,145 @@ void CompilerISPC::emit_resources()
 {
     auto &execution = get_entry_point();
 
-	// Output all basic struct types which are not Block or BufferBlock as these are declared inplace
+    vector<string> varyings = { "varying", "uniform" };
+
+    if (requires_op_dot)
+    {
+        statement("");
+        statement("//////////////////////////////");
+        statement("// Dot Product");
+        statement("//////////////////////////////");
+        vector<vector<string>> varying_tuples = {
+            { "varying", "varying", "varying" },
+            { "varying", "varying", "uniform" },
+            { "varying", "uniform", "varying" },
+            { "uniform", "uniform", "uniform" },
+        };
+        for (auto &v : varying_tuples)
+        {
+            statement("inline ", v[0], " float dot(", v[1], " float4& lhs, ", v[2], " float4& rhs)");
+            begin_scope();
+            statement("return lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z + lhs.w * rhs.w;");
+            end_scope();
+            statement("");
+            statement("inline ", v[0], " float dot(", v[1], " float3& lhs, ", v[2], " float3& rhs)");
+            begin_scope();
+            statement("return lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z;");
+            end_scope();
+            statement("");
+            statement("inline ", v[0], " float dot(", v[1], " float2& lhs, ", v[2], " float2& rhs)");
+            begin_scope();
+            statement("return lhs.x * rhs.x + lhs.y * rhs.y;");
+            end_scope();
+            statement("");
+        }
+    }
+
+    if (requires_op_len)
+    {
+        statement("");
+        statement("//////////////////////////////");
+        statement("// Length");
+        statement("//////////////////////////////");
+        for (auto &v : varyings)
+        {
+            statement("inline ", v, " float length(", v, " float3& rhs)");
+            begin_scope();
+            statement("return sqrt(dot(rhs, rhs));");
+            end_scope();
+            statement("");
+        }
+    }
+
+    if (requires_op_reflect)
+    {
+        statement("");
+        statement("//////////////////////////////");
+        statement("// Reflect");
+        statement("//////////////////////////////");
+        vector<int> width = { 2, 3, 4 };
+        vector<vector<string>> varying_tuples = {
+            { "varying", "varying", "varying" },
+            { "varying", "varying", "uniform" },
+            { "varying", "uniform", "varying" },
+            { "uniform", "uniform", "uniform" },
+        };
+
+        // v = i - 2 * n * dot(i•n)
+        for (auto &v : varying_tuples)
+        {
+            for (auto &w : width)
+            {
+                statement("inline ", v[0], " float", w, " reflect(", v[1], " float", w, "& i, ", v[2], " float", w, "& n)");
+                begin_scope();
+                statement("return i - n * float", w, "_init(dot(i, n) * 2.0f);");
+                end_scope();
+                statement("");
+            }
+        }
+    }
+
+    if (requires_op_mix)
+    {
+        //x + s(y-x)
+        statement("");
+        statement("//////////////////////////////");
+        statement("// Mix");
+        statement("//////////////////////////////");
+        vector<int> width = { 1, 2, 3, 4 };
+        for (auto &v : varyings)
+        {
+            for (auto &w : width)
+            {
+                if (w == 1)
+                    statement("inline ", v, " float mix(", v, " float& x, ", v, " float& y, ", v, " float& s)");
+                else
+                    statement("inline ", v, " float", w, " mix(", v, " float", w, "& x, ", v, " float", w, "& y, ", v, " float", w, "& s)");
+                begin_scope();
+                statement("return x + s * (y - x);");
+                end_scope();
+                statement("");
+            }
+        }
+    }
+
+    if (requires_op_atomics)
+    {
+        statement("");
+        statement("//////////////////////////////");
+        statement("// Atomics");
+        statement("//////////////////////////////");
+        vector<string> op = { "atomic_add", "atomic_subtract", "atomic_min", "atomic_max", "atomic_and", "atomic_or", "atomic_xor" };
+        for (auto &o : op)
+        {
+            statement("inline varying int ", o, "(uniform int * uniform ptr, varying int value)");
+            begin_scope();
+            statement("uniform int ret[programCount];");
+            statement("foreach_active(instance)");
+            begin_scope();
+            statement("uniform int val = extract(value, instance);");
+            statement("ret[instance] = ", o, "_global(ptr, val);");
+            end_scope();
+            statement("varying int vRet = *((varying int * uniform) &ret);");
+            statement("return vRet;");
+            end_scope();
+            statement("");
+
+            statement("inline varying int ", o, "(uniform int * uniform ptr, uniform int value)");
+            begin_scope();
+            statement("uniform int ret[programCount];");
+            statement("foreach_active(instance)");
+            begin_scope();
+            statement("ret[instance] = ", o, "_global(ptr, value);");
+            end_scope();
+            statement("varying int vRet = *((varying int * uniform) &ret);");
+            statement("return vRet;");
+            end_scope();
+            statement("");
+        }
+    }
+
+    // Output all basic struct types which are not Block or BufferBlock as these are declared inplace
 	// when such variables are instantiated.
     statement("");
     statement("//////////////////////////////");
@@ -251,26 +408,7 @@ void CompilerISPC::emit_resources()
 			emitted = true;
 		}
 	}
-#if 0
-	if (emitted)
-		statement("");
 
-	statement("inline void init(spirv_cross_shader& s)");
-	begin_scope();
-	statement(resource_type, "::init(s);");
-	for (auto &reg : resource_registrations)
-		statement(reg);
-	end_scope();
-	resource_registrations.clear();
-
-	end_scope_decl();
-
-	statement("");
-	statement("Resources* __res;");
-	if (get_entry_point().model == ExecutionModelGLCompute)
-		statement("ComputePrivateResources __priv_res;");
-	statement("");
-#endif
 	// Emit regular globals which are allocated per invocation.
 	emitted = false;
     statement("");
@@ -290,67 +428,8 @@ void CompilerISPC::emit_resources()
 		}
 	}
 
-	if (emitted)
-		statement("");
-
-    // Emit the input globals
-    statement("");
-    statement("//////////////////////////////");
-    statement("// Input Globals");
-    statement("//////////////////////////////");
-    for (auto &reg : resource_registrations)
-        statement(reg);
-    resource_registrations.clear();
     statement("");
 
-
-    statement("");
-    statement("//////////////////////////////");
-    statement("// Work Group Variables");
-    statement("//////////////////////////////");
-    statement("uniform int<3> gl_WorkGroupID;");
-    statement("varying int<3> gl_GlobalInvocationID;");
-    statement("varying int<3> gl_LocalInvocationID;");
-    statement("varying int    gl_LocalInvocationIndex;");
-    statement("uniform int<3> gl_WorkGroupSize = {", execution.workgroup_size.x, ", ", execution.workgroup_size.y, ", ", execution.workgroup_size.z, "};");
-    statement("");
-
-    if (requires_op_dot)
-    {
-        statement("");
-        statement("//////////////////////////////");
-        statement("// Dot Product");
-        statement("//////////////////////////////");
-        statement("inline float dot(float4& lhs, float4& rhs)");
-        begin_scope();
-        statement("return lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z + lhs.w * rhs.w;");
-        end_scope();
-        statement("");
-        statement("inline float dot(float3& lhs, float3& rhs)");
-        begin_scope();
-        statement("return lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z;");
-        end_scope();
-        statement("");
-        statement("inline float dot(float2& lhs, float2& rhs)");
-        begin_scope();
-        statement("return lhs.x * rhs.x + lhs.y * rhs.y;");
-        end_scope();
-        statement("");
-    }
-
-    if (requires_op_len)
-    {
-        statement("");
-        statement("//////////////////////////////");
-        statement("// Length");
-        statement("//////////////////////////////");
-        statement("inline float length(float3& rhs)");
-        begin_scope();
-        statement("return sqrt(dot(rhs, rhs));");
-        end_scope();
-        statement("");
-    }
-    statement("");
     statement("//////////////////////////////");
     statement("// Converted Code");
     statement("//////////////////////////////");
@@ -361,10 +440,7 @@ void CompilerISPC::find_vectorisation_variables()
     VectorisationHandler handler(*this);
     traverse_all_reachable_opcodes(get<SPIRFunction>(entry_point), handler);
     
-    if (handler.propogate_ispc_varyings_for_builtins())
-    {
-        printf("Propogated");
-    }
+    handler.propogate_ispc_varyings_for_builtins();
 }
 
 string CompilerISPC::compile()
@@ -373,7 +449,7 @@ string CompilerISPC::compile()
 	ClassicLocale classic_locale;
 
     // Convert the use of global variables to recursively-passed function parameters
-//    localize_global_variables();
+    localize_global_variables();
     extract_global_variables_from_functions();
 
 	// Do not deal with ES-isms like precision, older extensions and such.
@@ -384,7 +460,7 @@ string CompilerISPC::compile()
 	backend.long_long_literal_suffix = true;
 	backend.uint32_t_literal_suffix = true;
 	backend.basic_int_type = "int";
-    backend.basic_uint_type = "int";
+    backend.basic_uint_type = "int"; // We should support this at some point...
     backend.swizzle_is_function = false;
 	backend.shared_is_implied = true;
 	backend.flexible_member_array_supported = false;
@@ -398,7 +474,7 @@ string CompilerISPC::compile()
 	uint32_t pass_count = 0;
 	do
 	{
-		if (pass_count >= 3)
+        if (pass_count >= 3)
 			SPIRV_CROSS_THROW("Over 3 compilation loops detected. Must be a bug!");
 
         resource_registrations.clear();
@@ -472,32 +548,28 @@ void CompilerISPC::emit_c_linkage()
 void CompilerISPC::emit_ispc_main()
 {
     auto &execution = get_entry_point();
+
+    string entry_point_name = interface_name.empty() ? string("ispc") : interface_name;
+
+
     statement("");
     statement("//////////////////////////////");
     statement("// ISPC Entry Points");
     statement("//////////////////////////////");
 
+    // Dispatch all
     if (resource_entry_arguments.empty())
-        statement("export void ispc_main(uniform int wg[3])");
+        statement("export void ", entry_point_name, "_dispatch_all(uniform int wg[3])");
     else
     {
-        statement("export void ispc_main(uniform int wg[3],");
-        for (uint32_t ii = 0; ii < resource_entry_arguments.size(); ii++)
-        {
-            if ((ii + 1) < resource_entry_arguments.size())
-                statement("\t", resource_entry_arguments[ii], ",");
-            else
-                statement("\t", resource_entry_arguments[ii], ")");
-        }
+        string decl = "export void " + entry_point_name + "_dispatch_all(uniform int wg[3], ";
+        decl += entry_point_args(!get<SPIRFunction>(entry_point).arguments.empty(), false);
+        decl += ")";
+
+        statement(decl);
     }
     {
         begin_scope();
-
-        statement("// Initialise the globals");
-        for (auto &reg : resource_entry_arguments_init)
-            statement(reg);
-        resource_registrations.clear();
-        statement("");
 
         statement("// Loop over the work group dimensions");
         statement("for(uniform int z = 0; z < wg[2]; z++)");
@@ -509,23 +581,40 @@ void CompilerISPC::emit_ispc_main()
                 statement("for(uniform int x = 0; x < wg[0]; x++)");
                 {
                     begin_scope();
-                    statement("uniform int<3> wgID = {x, y, z};"); //  
-                    statement("gl_WorkGroupID = wgID;"); //  
+                    statement("uniform int3 gl_WorkGroupID = {x, y, z};"); //  
                     assert(execution.workgroup_size.y == 1);
                     assert(execution.workgroup_size.z == 1);
                     statement("");
                     statement("// Vectorise the workgroup");
-                    statement("foreach(ii = 0 ... ", execution.workgroup_size.x, " )");
+                    statement("foreach(ii = 0 ... gl_WorkGroupSize.x )");
                     {
                         begin_scope();
                         statement("// Keep it 1-dimensional for now");
-                        statement("int<3> giID = {x * gl_WorkGroupSize.x + ii, 0, 0};");
-                        statement("gl_GlobalInvocationID = giID;");
-                        statement("int<3> liID= {ii, 0, 0};"); // 
-                        statement("gl_LocalInvocationID = liID;"); // 
-                        statement("gl_LocalInvocationIndex = gl_LocalInvocationID.z * gl_WorkGroupSize.x * gl_WorkGroupSize.y + gl_LocalInvocationID.y * gl_WorkGroupSize.x + gl_LocalInvocationID.x;");
+                        statement("varying int3 gl_GlobalInvocationID = {x * gl_WorkGroupSize.x + ii, y, z};");
+                        statement("varying int3 gl_LocalInvocationID= {ii, y, z};"); // 
+                        statement("varying int gl_LocalInvocationIndex = gl_LocalInvocationID.z * gl_WorkGroupSize.x * gl_WorkGroupSize.y + gl_LocalInvocationID.y * gl_WorkGroupSize.x + gl_LocalInvocationID.x;");
                         statement("");
-                        statement("main();");
+
+                        if (resource_entry_arguments.empty())
+                            statement("ispc_main();");
+                        else
+                        {
+                            string decl = "ispc_main(";
+                            decl += entry_point_args_init(!get<SPIRFunction>(entry_point).arguments.empty(), true);
+                            decl += ");";
+                            statement(decl);
+/*
+                            string args;
+                            for (uint32_t ii = 0; ii < resource_entry_arguments_init.size(); ii++)
+                            {
+                                args += resource_entry_arguments_init[ii];
+                                if ((ii + 1) < resource_entry_arguments_init.size())
+                                    args += ", ";
+                            }
+                            statement("main(", args, ");");
+*/
+                        }
+
 
                         end_scope();
                     }
@@ -537,42 +626,57 @@ void CompilerISPC::emit_ispc_main()
         }
         end_scope();
     }
-
-    statement("");
-    statement("export void ispc_get_workgroup_size(uniform int& wg[3])");
-    begin_scope();
-    statement("wg[0] = gl_WorkGroupSize.x;");
-    statement("wg[1] = gl_WorkGroupSize.y;");
-    statement("wg[2] = gl_WorkGroupSize.z;");
-    end_scope();
     statement("");
 
-    statement("");
+    // Dispatch single
     if (resource_entry_arguments.empty())
-        statement("export void ispc_main2(uniform int wg[3])");
+        statement("export void ", "export void ", entry_point_name, "_dispatch_single(uniform int wg[3])");
     else
     {
-        statement("export void ispc_main2(uniform int wg[3],");
-        for (uint32_t ii = 0; ii < resource_entry_arguments.size(); ii++)
-        {
-            if ((ii + 1) < resource_entry_arguments.size())
-                statement("\t", resource_entry_arguments[ii], ",");
-            else
-                statement("\t", resource_entry_arguments[ii], ")");
-        }
+        string decl = "export void " + entry_point_name + "_dispatch_single(uniform int wg[3], ";
+        decl += entry_point_args(!get<SPIRFunction>(entry_point).arguments.empty(), false);
+        decl += ")";
+
+        statement(decl);
     }
     {
         begin_scope();
-
-        statement("// Initialise the globals");
-        statement("_113 = a__113;");
-        statement("_113.g_param.x = 1234;");
-        statement("a__113 = _113;");
-        end_scope();
+        statement("uniform int3 gl_WorkGroupID = {wg[0], wg[1], wg[2]};"); //  
+        assert(execution.workgroup_size.y == 1);
+        assert(execution.workgroup_size.z == 1);
         statement("");
+        statement("// Vectorise the workgroup");
+        statement("foreach(ii = 0 ... gl_WorkGroupSize.x )");
+        {
+            begin_scope();
+            statement("// Keep it 1-dimensional for now");
+            statement("varying int3 gl_GlobalInvocationID = {gl_WorkGroupID.x * gl_WorkGroupSize.x + ii, gl_WorkGroupID.y, gl_WorkGroupID.z};");
+            statement("varying int3 gl_LocalInvocationID= {ii, gl_WorkGroupID.y, gl_WorkGroupID.z};"); // 
+            statement("varying int gl_LocalInvocationIndex = gl_LocalInvocationID.z * gl_WorkGroupSize.x * gl_WorkGroupSize.y + gl_LocalInvocationID.y * gl_WorkGroupSize.x + gl_LocalInvocationID.x;");
+            statement("");
+
+            if (resource_entry_arguments.empty())
+                statement("ispc_main();");
+            else
+            {
+                string decl = "ispc_main(";
+                decl += entry_point_args_init(!get<SPIRFunction>(entry_point).arguments.empty(), true);
+                decl += ");";
+                statement(decl);
+            }
+            end_scope();
+        }
+        end_scope();
     }
 
-
+    statement("");
+    statement("export void ", entry_point_name, "_get_workgroup_size(uniform int & wg_x, uniform int & wg_y, uniform int & wg_z)");
+    begin_scope();
+    statement("wg_x = gl_WorkGroupSize.x;");
+    statement("wg_y = gl_WorkGroupSize.y;");
+    statement("wg_z = gl_WorkGroupSize.z;");
+    end_scope();
+    statement("");
 
 }
 
@@ -582,22 +686,28 @@ void CompilerISPC::emit_function_prototype(SPIRFunction &func, uint64_t)
 	string decl;
 
 	auto &type = get<SPIRType>(func.return_type);
-	decl += "inline ";
+	decl += "static inline ";
 	decl += type_to_glsl(type);
 	decl += " ";
 
 	if (func.self == entry_point)
 	{
-		decl += "main";
+		decl += "ispc_main";
 		processing_entry_point = true;
 	}
 	else
 		decl += to_name(func.self);
 
 	decl += "(";
+
+    if (processing_entry_point)
+    {
+        decl += entry_point_args(!func.arguments.empty(), true);
+    }
+
 	for (auto &arg : func.arguments)
 	{
-		add_local_variable_name(arg.id);
+        //	add_local_variable_name(arg.id);
 
 		decl += argument_decl(arg);
 		if (&arg != &func.arguments.back())
@@ -618,14 +728,17 @@ string CompilerISPC::argument_decl(const SPIRFunction::Parameter &arg)
 	auto &type = expression_type(arg.id);
 	bool constref = !type.pointer || arg.write_count == 0;
 
+    // remove const for now as it causes some ISPC issues
+    constref = false;
+
 	auto &var = get<SPIRVariable>(arg.id);
 
-	string base = type_to_glsl(type);
+	string base = type_to_glsl(type, arg.id);
 	string variable_name = to_name(var.self);
 	remap_variable_type_name(type, variable_name, base);
 
 	for (uint32_t i = 0; i < type.array.size(); i++)
-		base = join("std::array<", base, ", ", to_array_size(type, i), ">");
+		base = join("a std::array<", base, ", ", to_array_size(type, i), ">");
 
 	return join(
         varyings[arg.id] ? "varying " : "uniform ", 
@@ -649,9 +762,10 @@ string CompilerISPC::variable_decl(const SPIRType &type, const string &name, uin
         // Should only get in here for struct members etc
     }
 
-	base += type_to_glsl(type);
+	base += type_to_glsl(type, id);
 	remap_variable_type_name(type, name, base);
 	bool runtime = false;
+    string arrayString = "";
 
 	for (uint32_t i = 0; i < type.array.size(); i++)
 	{
@@ -662,93 +776,226 @@ string CompilerISPC::variable_decl(const SPIRType &type, const string &name, uin
 			// Runtime arrays cannot be passed around as values, so this is fine.
 			runtime = true;
 		}
-		else
-			base = join("std::array<", base, ", ", to_array_size(type, i), ">");
+        else
+        {
+            arrayString = join("[", to_array_size(type, i), "]");
+        }
 	}
 	base += ' ';
-	return base + name + (runtime ? "[]" : "");
+	return base + name + (runtime ? "[]" : arrayString);
 }
 
-void CompilerISPC::create_default_constructor(std::string type, std::string vector, uint32_t width, uint32_t arg_count, uint32_t arg_width[4])
+void CompilerISPC::create_default_constructor(std::string type, bool varying, uint32_t width, uint32_t arg_count, uint32_t arg_width[4])
 {
     std::vector<string> arg_names = { "a", "b", "c", "d" };
     std::vector<string> arg_swizzles = { ".x", ".y", ".z", ".w" };
 
-    // Create signature
-    string args = "";
-    for (uint32_t ac = 0; ac < arg_count; ac++)
-    {
-        args += join(vector, "const ", type);   // varying const float
-        if (arg_width[ac] > 1)
-            args += join(arg_width[ac]);        // varying const float2
-        args += "&";                            // varying const float2&
-        args += join(" ", arg_names[ac]);       // varying const float2& a
-        if ((ac + 1) < arg_count)
-            args += ", ";
-    }
+    std::vector<string> vector_names = { "varying ", "uniform " };
+    std::string v = vector_names[varying ? 0 : 1];
 
-    statement("inline ", vector, type, width, " ", type, width, "_init(", args, " )");
-    begin_scope();
+    uint32_t function_count = 1;
+    if (varying && arg_count > 1)
+        function_count = 2;
 
-    // Create list initialiser
-    string init;
-    uint32_t required_initialisers = 0;
-    while (required_initialisers < width)
+    // For varying functions, create 2 variants
+    // 1 - func (varying, varying)
+    // 2 - func (varying, uniform)
+    // Could do more, but that will suffice for now
+    for (uint32_t ii = 0; ii < function_count; ii++)
     {
+        // Create signature
+        string args = "";
         for (uint32_t ac = 0; ac < arg_count; ac++)
         {
-            for (uint32_t aw = 0; aw < arg_width[ac]; aw++)
-            {
-                required_initialisers++;
+            if ((ac == arg_count - 1) && (function_count > 1))
+                args += vector_names[ii];
+            else
+                args += v;
 
-                init += arg_names[ac];
-                if (arg_width[ac] > 1)
-                    init += arg_swizzles[aw];
-                if (required_initialisers < width)
-                    init += ", ";
+            args += join("const ", type);   // varying const float
+            if (arg_width[ac] > 1)
+                args += join(arg_width[ac]);        // varying const float2
+            args += "&";                            // varying const float2&
+            args += join(" ", arg_names[ac]);       // varying const float2& a
+            if ((ac + 1) < arg_count)
+                args += ", ";
+        }
+
+        statement("inline ", v, type, width, " ", type, width, "_init(", args, " )");
+        begin_scope();
+
+        // Create list initialiser
+        string init;
+        uint32_t required_initialisers = 0;
+        while (required_initialisers < width)
+        {
+            for (uint32_t ac = 0; ac < arg_count; ac++)
+            {
+                for (uint32_t aw = 0; aw < arg_width[ac]; aw++)
+                {
+                    required_initialisers++;
+
+                    init += arg_names[ac];
+                    if (arg_width[ac] > 1)
+                        init += arg_swizzles[aw];
+                    if (required_initialisers < width)
+                        init += ", ";
+                }
             }
         }
-    }
 
-    statement(vector, type, width, " ret = { ", init, " }; ");
-    statement("return ret;");
-    end_scope();
+        statement(v, type, width, " ret = { ", init, " }; ");
+        statement("return ret;");
+        end_scope();
+        statement("");
+    }
+}
+
+void CompilerISPC::create_default_binary_op(std::string type, uint32_t width, std::string op)
+{
+    vector<string> varying = { "uniform ", "varying " };
+    vector<string> arg_swizzles = { ".x", ".y", ".z", ".w" };
+
+    for (auto& arg1 : varying)
+    {
+        for (auto& arg2 : varying)
+        {
+            auto& ret_varying = (arg1 != arg2) ? varying[1] : arg1;
+            // scalar
+            statement("inline ", ret_varying, type, width, " operator", op, "(", arg1, type, width, " a, ", arg2, type, " b)");
+            begin_scope();
+            statement(ret_varying, type, width, " ret;");
+            for (uint32_t ii = 0; ii < width; ii++)
+            {
+                statement("ret", arg_swizzles[ii], " = a", arg_swizzles[ii], " ", op, " b;");
+            }
+            statement("return ret;");
+            end_scope();
+            statement("");
+
+            // vector
+            statement("inline ", ret_varying, type, width, " operator", op, "(", arg1, type, width, " a, ", arg2, type, width, " b)");
+            begin_scope();
+            statement(ret_varying, type, width, " ret;");
+            for (uint32_t ii = 0; ii < width; ii++)
+            {
+                statement("ret", arg_swizzles[ii], " = a", arg_swizzles[ii], " ", op, " b", arg_swizzles[ii], ";");
+            }
+            statement("return ret;");
+            end_scope();
+            statement("");
+        }
+    }
+}
+
+void CompilerISPC::create_default_load_op(std::string type, uint32_t width)
+{
+    vector<string> varying = { "uniform ", "varying " };
+    vector<string> arg_swizzles = { ".x", ".y", ".z", ".w" };
+
+    for (auto& v : varying)
+    {
+        statement("inline ", v , type, width, " load", width, "(", v, type, width, PACKED, " a)");
+        begin_scope();
+        string args;
+        for (uint32_t ii = 0; ii < width; ii++)
+        {
+            args += join("a", arg_swizzles[ii]);
+            if ((ii + 1) < width)
+                args += ", ";
+        }
+        statement("return ", type, width, "_init(", args, ");");
+        end_scope();
+        statement("");
+    }
+}
+
+void CompilerISPC::create_default_store_op(std::string type, uint32_t width)
+{
+    vector<string> varying = { "uniform ", "varying " };
+    vector<string> arg_swizzles = { ".x", ".y", ".z", ".w" };
+    for (auto& v : varying)
+    {
+        statement("inline ", v, type, width, PACKED, " store", width, "(", v, type, width, " a)");
+        begin_scope();
+        statement(v, type, width, PACKED, " ret;");
+
+        string args;
+        for (uint32_t ii = 0; ii < width; ii++)
+        {
+            statement("ret", arg_swizzles[ii], " = a", arg_swizzles[ii], ";");
+        }
+        statement("return ret;");
+        end_scope();
+        statement("");
+    }
+}
+
+void CompilerISPC::create_default_structs(std::string type, uint32_t width)
+{
+    std::vector<string> arg_swizzles = { "x", "y", "z", "w" };
+    statement("struct ", type, width, PACKED);
+    begin_scope();
+    string args;
+    for (uint32_t ii = 0; ii < width; ii++)
+    {
+        statement(type, " ", arg_swizzles[ii], ";");
+    }
+    end_scope_decl();
     statement("");
 }
 
 void CompilerISPC::emit_header()
 {
-	auto &execution = get_entry_point();
+    auto &execution = get_entry_point();
+    std::tm localTime;
+    std::time_t result = std::time(nullptr);
+
+    localtime_s(&localTime, &result);
 
     statement("//");
     statement("//////////////////////////////");
     statement("// This ISPC kernel is autogenerated by spirv-cross.");
+    statement("// ", std::put_time(&localTime, "%c"));
     statement("//////////////////////////////");
     statement("//");
     statement("");
+
+    statement("");
+    statement("//////////////////////////////");
+    statement("// Work Group");
+    statement("//////////////////////////////");
+    statement("static uniform int<3> gl_WorkGroupSize = {", execution.workgroup_size.x, ", ", execution.workgroup_size.y, ", ", execution.workgroup_size.z, "};");
+    statement("");
+
+
     statement("");
     statement("//////////////////////////////");
     statement("// Default Types");
     statement("//////////////////////////////");
-    statement("typedef float<2> float2;");
-    statement("typedef float<3> float3;");
-    statement("typedef float<4> float4;");
-    statement("");
-    statement("typedef int<2> int2;");
-    statement("typedef int<3> int3;");
-    statement("typedef int<4> int4;");
+    statement("typedef float mat3[3][3];");
+    statement("typedef float mat4[4][4];");
 
     std::vector<uint32_t> widths = { 2, 3, 4 };
     std::vector<string> types = { "float", "int" };
-    std::vector<string> vector = { "varying ", "uniform " }; // note spaces
+    for (const string& t : types)
+    {
+        create_default_structs(t, 1);
+        for (const uint32_t& w : widths)
+        {
+            create_default_structs(t, w);
+        }
+    }
 
+    std::vector<bool> varying = { true, false }; 
+#if 1
     statement("");
     statement("//////////////////////////////");
     statement("// Default Constructors");
     statement("//////////////////////////////");
     for (const string& t : types)
     {
-        for (const string& v : vector)
+        for (const bool& v : varying)
         {
             for (const uint32_t& w : widths)
             {
@@ -773,6 +1020,28 @@ void CompilerISPC::emit_header()
             }
         }
     }
+#endif
+    statement("");
+    statement("//////////////////////////////");
+    statement("// Default Operators");
+    statement("//////////////////////////////");
+    std::vector<uint32_t> load_widths = { 2, 3, 4 };
+    std::vector<string> load_types = { "float", "int" };
+//    std::vector<string> binary_ops = { "*", "/", "%", "+", "-" };
+    std::vector<string> binary_ops = { "*", "/", "+", "-" };
+    for (const string& t : load_types)
+    {
+        for (const uint32_t& w : load_widths)
+        {
+//            create_default_load_op(t, w);
+//            create_default_store_op(t, w);
+            for (const string& bop : binary_ops)
+            {
+                create_default_binary_op(t, w, bop);
+            }
+        }
+    }
+
 
 //	statement("#include \"spirv_cross/internal_interface.hpp\"");
 //	statement("#include \"spirv_cross/external_interface.h\"");
@@ -899,24 +1168,50 @@ string CompilerISPC::type_to_glsl(const SPIRType &type, uint32_t id)
     }
     else if (type.vecsize > 1 && type.columns == 1) // Vector builtin
     {
-        switch (type.basetype)
+        // Its a struct, so can;t use short vectors if it is to be shared with the app
+            if (id == 0)
+            {
+            switch (type.basetype)
+            {
+            case SPIRType::Boolean:
+                return join("bool", type.vecsize, PACKED);
+            case SPIRType::Int:
+                return join("int", type.vecsize, PACKED);
+            case SPIRType::UInt:
+                return join("int", type.vecsize, PACKED);
+            case SPIRType::Float:
+                return join("float", type.vecsize, PACKED);
+            case SPIRType::Double:
+                return join("double", type.vecsize, PACKED);
+            case SPIRType::Int64:
+                return join("int64", type.vecsize, PACKED);
+            case SPIRType::UInt64:
+                return join("int64", type.vecsize, PACKED);
+            default:
+                return "???";
+            }
+        }
+        else
         {
-        case SPIRType::Boolean:
-            return join("bool<", type.vecsize, ">");
-        case SPIRType::Int:
-            return join("int<", type.vecsize, ">");
-        case SPIRType::UInt:
-            return join("int<", type.vecsize, ">");
-        case SPIRType::Float:
-            return join("float", type.vecsize);
-        case SPIRType::Double:
-            return join("double<", type.vecsize, ">");
-        case SPIRType::Int64:
-            return join("int64<", type.vecsize, ">");
-        case SPIRType::UInt64:
-            return join("int64<", type.vecsize, ">");
-        default:
-            return "???";
+            switch (type.basetype)
+            {
+            case SPIRType::Boolean:
+                return join("bool<", type.vecsize, ">");
+            case SPIRType::Int:
+                return join("int", type.vecsize);
+            case SPIRType::UInt:
+                return join("int", type.vecsize);
+            case SPIRType::Float:
+                return join("float", type.vecsize);
+            case SPIRType::Double:
+                return join("double<", type.vecsize, ">");
+            case SPIRType::Int64:
+                return join("int64<", type.vecsize, ">");
+            case SPIRType::UInt64:
+                return join("int64<", type.vecsize, ">");
+            default:
+                return "???";
+            }
         }
     }
     else if (type.vecsize == type.columns) // Simple Matrix builtin
@@ -959,6 +1254,7 @@ string CompilerISPC::type_to_glsl(const SPIRType &type, uint32_t id)
     }
 }
 
+
 void CompilerISPC::emit_instruction(const Instruction &instruction)
 {
     auto ops = stream(instruction);
@@ -979,6 +1275,25 @@ void CompilerISPC::emit_instruction(const Instruction &instruction)
 
     switch (opcode)
     {
+/*    case OpAccessChain:
+    case OpInBoundsAccessChain:
+    {
+        emit_access_chain(instruction);
+        break;
+    }
+
+    case OpStore:
+    {
+        emit_store(instruction);
+        break;
+    }
+
+    case OpLoad:
+    {
+        emit_load(instruction);
+        break;
+    }
+*/
     case OpDot:
     {
         if (!requires_op_dot)
@@ -1075,6 +1390,55 @@ void CompilerISPC::emit_instruction(const Instruction &instruction)
         break;
     }
 
+    case OpAtomicIAdd:
+    case OpAtomicISub:
+    case OpAtomicSMin:
+    case OpAtomicUMin:
+    case OpAtomicSMax:
+    case OpAtomicUMax:
+    case OpAtomicAnd:
+    case OpAtomicOr:
+    case OpAtomicXor:
+    {
+        if (check_atomic_image(ops[2]))
+        {
+            SPIRV_CROSS_THROW("Atomic images not supported for ISPC.");
+        }
+
+        if (!requires_op_atomics)
+        {
+            requires_op_atomics = true;
+            force_recompile = true;
+        }
+
+        string func;
+        switch (opcode)
+        {
+        case OpAtomicIAdd:
+            func = "atomic_add"; break;
+        case OpAtomicISub:
+            func = "atomic_subtract"; break;
+        case OpAtomicSMin:
+        case OpAtomicUMin:
+            func = "atomic_min"; break;
+        case OpAtomicSMax:
+        case OpAtomicUMax:
+            func = "atomic_max"; break;
+        case OpAtomicAnd:
+            func = "atomic_and"; break;
+        case OpAtomicOr:
+            func = "atomic_or"; break;
+        case OpAtomicXor:
+            func = "atomic_xor"; break;
+        }
+
+        forced_temporaries.insert(ops[1]);
+        auto expr = join(func, "(&", to_expression(ops[2]), ", ", to_enclosed_expression(ops[5]), ")");
+        emit_op(ops[0], ops[1], expr, should_forward(ops[2]) && should_forward(ops[5]));
+        flush_all_atomic_capable_variables();
+        register_read(ops[1], ops[2], should_forward(ops[2]));
+        break;
+    }
 
     default:
         CompilerGLSL::emit_instruction(instruction);
@@ -1116,6 +1480,26 @@ void CompilerISPC::emit_glsl_op(uint32_t result_type, uint32_t id, uint32_t eop,
         if (!requires_op_len)
         {
             requires_op_len = true;
+            requires_op_dot = true;
+            force_recompile = true;
+        }
+        break;
+
+    case GLSLstd450Reflect:
+        emit_binary_func_op(result_type, id, args[0], args[1], "reflect");
+        if (!requires_op_reflect)
+        {
+            requires_op_reflect = true;
+            requires_op_dot = true;
+            force_recompile = true;
+        }
+        break;
+
+    case GLSLstd450FMix:
+        emit_trinary_func_op(result_type, id, args[0], args[1], args[2], "mix");
+        if (!requires_op_mix)
+        {
+            requires_op_mix = true;
             force_recompile = true;
         }
         break;
@@ -1144,6 +1528,16 @@ bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *
         for (uint32_t i = 2; i < length; i += 2)
         {
             add_dependancies(args[1], args[i]);
+
+            // Access chains need to be 2-way as they are simply indirections.
+            // But, if the src is a global passed in by the user, then we don't as they are always uniform
+            // but perhaps with varying runtime arrays.
+            auto * var = compiler.maybe_get<SPIRVariable>(args[i]);
+            if (var && var->storage == StorageClassFunction)
+            {
+                add_dependancies(args[i], args[1]);
+            }
+
         }
 
         break;
@@ -1232,12 +1626,48 @@ bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *
         }
         break;
     }
+    case OpAtomicISub:
+    case OpAtomicIAdd:
+    {
+        // Atomics take uniform arguments (a buffer), but return varying results...
+        compiler.varyings[args[1]] = true;
+        break;
+    }
 
+    case OpUGreaterThan:
+    case OpSGreaterThan:
+    case OpUGreaterThanEqual:
+    case OpSGreaterThanEqual:
+    case OpULessThan:
+    case OpSLessThan:
+    case OpULessThanEqual:
+    case OpSLessThanEqual:
+    case OpFOrdEqual:
+    case OpFUnordEqual:
+    case OpFOrdNotEqual:
+    case OpFUnordNotEqual:
+    case OpFOrdLessThan:
+    case OpFUnordLessThan:
+    case OpFOrdGreaterThan:
+    case OpFUnordGreaterThan:
+    case OpFOrdLessThanEqual:
+    case OpFUnordLessThanEqual:
+    case OpFOrdGreaterThanEqual:
+    case OpFUnordGreaterThanEqual:
+    case OpLessOrGreater:
+    case OpOrdered:
+    case OpUnordered:
+    case OpLogicalEqual:
+    case OpLogicalNotEqual:
+    case OpLogicalOr:
+    case OpLogicalAnd:
+    case OpLogicalNot:
+        break;
 
     default:
     {
         // what is the default opcode
-        printf("unknown opcode");
+        printf("unknown opcode : %d\n", opcode);
     }
     }
 
@@ -1290,6 +1720,11 @@ bool CompilerISPC::VectorisationHandler::propogate_ispc_varyings_for_builtins()
                 bPropogate |= propogate_ispc_varyings(dependeeVarIt.first);
             }
         }
+        // This will catch any pre-determined varying args.
+        else if (compiler.varyings[dependeeVarIt.first])
+        {
+            bPropogate |= propogate_ispc_varyings(dependeeVarIt.first);
+        }
     }
 
     return bPropogate;
@@ -1307,9 +1742,9 @@ void CompilerISPC::extract_global_variables_from_functions()
         if (id.get_type() == TypeVariable)
         {
             auto &var = id.get<SPIRVariable>();
-//            if (var.storage == StorageClassInput || var.storage == StorageClassUniform ||
-//                var.storage == StorageClassUniformConstant || var.storage == StorageClassPushConstant)
-            if (var.storage == StorageClassUniform)
+            if (var.storage == StorageClassInput || var.storage == StorageClassUniform ||
+                var.storage == StorageClassUniformConstant || var.storage == StorageClassPushConstant)
+//            if (var.storage == StorageClassUniform)
             {
                 global_var_ids.insert(var.self);
             }
@@ -1394,8 +1829,7 @@ void CompilerISPC::extract_global_variables_from_function(uint32_t func_id, std:
             set<SPIRVariable>(next_id, type_id, StorageClassFunction);
 
             // Ensure both the existing and new variables have the same name, and the name is valid
-            string vld_name = ensure_valid_name(to_name(arg_id), "");
-//            string vld_name = to_name(arg_id);
+            string vld_name = ensure_valid_name(to_name(arg_id), "a");
             set_name(arg_id, vld_name);
             set_name(next_id, vld_name);
 
@@ -1437,4 +1871,370 @@ string CompilerISPC::ensure_valid_name(string name, string pfx)
     {
         return name;
     }
+}
+
+void CompilerISPC::find_entry_point_args()
+{
+    if (!entry_point_ids.empty())
+        return;
+
+    // Uniforms
+    for (auto &id : ids)
+    {
+        if (id.get_type() == TypeVariable)
+        {
+            auto &var = id.get<SPIRVariable>();
+            auto &type = get<SPIRType>(var.basetype);
+
+            uint32_t var_id = var.self;
+
+            if ((var.storage == StorageClassUniform || var.storage == StorageClassUniformConstant ||
+                var.storage == StorageClassPushConstant) &&
+                !is_hidden_variable(var))
+            {
+                switch (type.basetype)
+                {
+                case SPIRType::Struct:
+                {
+                    auto &m = meta.at(type.self);
+                    if (m.members.size() == 0)
+                        break;
+
+                    entry_point_ids.push_back(&id);
+                    break;
+                }
+                default:
+                    break;
+                }
+            }
+            if (var.storage == StorageClassInput && is_builtin_variable(var))
+            {
+                entry_point_ids.push_back(&id);
+            }
+        }
+    }
+
+    // Sort the args based on their names. This ensures that the ordering is consistant between
+    // multiple runs of the compiler.
+    if (entry_point_ids.size() > 1)
+        sort(entry_point_ids.begin(), entry_point_ids.end(), 
+            [=](const Variant* a, const Variant* b) -> bool
+    {
+        auto &varA = a->get<SPIRVariable>();
+        auto &varB = b->get<SPIRVariable>();
+
+        auto &nameA = to_name(varA.self);
+        auto &nameB = to_name(varB.self);
+
+        return nameA > nameB;
+    }
+    );
+}
+
+
+// Returns a string containing a comma-delimited list of args for the entry point function
+string CompilerISPC::entry_point_args(bool append_comma, bool want_builtins)
+{
+    find_entry_point_args();
+
+    string ep_args;
+
+    // Uniforms
+    for (auto &id : entry_point_ids)
+    {
+        auto &var = id->get<SPIRVariable>();
+        auto &type = get<SPIRType>(var.basetype);
+
+        uint32_t var_id = var.self;
+
+        if ((var.storage == StorageClassUniform || var.storage == StorageClassUniformConstant ||
+            var.storage == StorageClassPushConstant) &&
+            !is_hidden_variable(var))
+        {
+            switch (type.basetype)
+            {
+            case SPIRType::Struct:
+            {
+                string varying = varyings[var_id] ? "varying " : "uniform ";
+                auto &m = meta.at(type.self);
+                if (m.members.size() == 0)
+                    break;
+                if (!ep_args.empty())
+                    ep_args += ", ";
+                ep_args += " " + varying + type_to_glsl(type, var_id) + "& " + to_name(var_id);
+                break;
+            }
+            default:
+                break;
+            }
+        }
+        if (var.storage == StorageClassInput && is_builtin_variable(var) && want_builtins)
+        {
+            string varying = varyings[var_id] ? "varying " : "uniform ";
+            if (!ep_args.empty())
+                ep_args += ", ";
+            BuiltIn bi_type = meta[var_id].decoration.builtin_type;
+            ep_args += varying + type_to_glsl(type, var_id) + " " + to_expression(var_id);
+        }
+    }
+
+    if (!ep_args.empty() && append_comma)
+        ep_args += ", ";
+
+    return ep_args;
+}
+
+string CompilerISPC::entry_point_args_init(bool append_comma, bool want_builtins)
+{
+    find_entry_point_args();
+
+    string ep_args;
+    // Uniforms
+    for (auto &id : entry_point_ids)
+    {
+        auto &var = id->get<SPIRVariable>();
+        auto &type = get<SPIRType>(var.basetype);
+
+        uint32_t var_id = var.self;
+
+        if ((var.storage == StorageClassUniform || var.storage == StorageClassUniformConstant ||
+            var.storage == StorageClassPushConstant) &&
+            !is_hidden_variable(var))
+        {
+            switch (type.basetype)
+            {
+            case SPIRType::Struct:
+            {
+                auto &m = meta.at(type.self);
+                if (m.members.size() == 0)
+                    break;
+                if (!ep_args.empty())
+                    ep_args += ", ";
+                ep_args += " " + to_name(var_id);
+                break;
+            }
+            default:
+                break;
+            }
+        }
+        if (var.storage == StorageClassInput && is_builtin_variable(var) && want_builtins)
+        {
+            if (!ep_args.empty())
+                ep_args += ", ";
+            BuiltIn bi_type = meta[var_id].decoration.builtin_type;
+            ep_args += to_expression(var_id);
+        }
+    }
+
+    if (!ep_args.empty() && append_comma)
+        ep_args += ", ";
+
+    return ep_args;
+}
+
+string CompilerISPC::read_access_chain(const SPIRAccessChain &chain)
+{
+    auto &type = get<SPIRType>(chain.basetype);
+
+    SPIRType target_type;
+    target_type.basetype = SPIRType::UInt;
+    target_type.vecsize = type.vecsize;
+    target_type.columns = type.columns;
+
+    // FIXME: Transposition?
+    if (type.columns != 1)
+        SPIRV_CROSS_THROW("Reading matrices from ByteAddressBuffer not yet supported.");
+
+    if (type.basetype == SPIRType::Struct)
+        return "blurgh structs from ByteAddressBuffer";
+//        SPIRV_CROSS_THROW("Reading structs from ByteAddressBuffer not yet supported.");
+
+    if (type.width != 32)
+        SPIRV_CROSS_THROW("Reading types other than 32-bit from ByteAddressBuffer not yet supported.");
+
+    const char *load_op = nullptr;
+    switch (type.vecsize)
+    {
+    case 1:
+        load_op = "load1";
+        break;
+    case 2:
+        load_op = "load2";
+        break;
+    case 3:
+        load_op = "load3";
+        break;
+    case 4:
+        load_op = "load4";
+        break;
+    default:
+        SPIRV_CROSS_THROW("Unknown vector size.");
+    }
+
+    // currently have     varying float4 pos = uintBitsToFloat(oldPosVelo.Load4(DTid.x * 32 + 0));
+    // want               varying float4 pos = float4_init(oldPosVelo._data[DTid.x].pos);
+
+    //chain.base = oldPosVelo
+    //chain.dynamic_index = DTid.x * 32;
+    //chain.static_index = 0
+    //bitcase = uintBitsToFloat
+
+    auto load_expr = join(load_op, "(", chain.base, ")");
+
+    return load_expr;
+}
+
+void CompilerISPC::emit_load(const Instruction &instruction)
+{
+    auto ops = stream(instruction);
+
+    auto *chain = maybe_get<SPIRAccessChain>(ops[2]);
+    if (chain)
+    {
+        uint32_t result_type = ops[0];
+        uint32_t id = ops[1];
+        uint32_t ptr = ops[2];
+
+        auto load_expr = read_access_chain(*chain);
+
+        bool forward = should_forward(ptr) && forced_temporaries.find(id) == end(forced_temporaries);
+        auto &e = emit_op(result_type, id, load_expr, forward, true);
+        e.need_transpose = false; // TODO: Forward this somehow.
+        register_read(id, ptr, forward);
+    }
+    else
+        CompilerGLSL::emit_instruction(instruction);
+}
+
+void CompilerISPC::emit_store(const Instruction &instruction)
+{
+    auto ops = stream(instruction);
+    auto *chain = maybe_get<SPIRAccessChain>(ops[0]);
+    auto &type = expression_type(ops[0]);
+//    if (chain && type.vecsize > 1)
+        if (0)
+        {
+
+        SPIRType target_type;
+        target_type.basetype = SPIRType::UInt;
+        target_type.vecsize = type.vecsize;
+        target_type.columns = type.columns;
+
+        const char *store_op = nullptr;
+        switch (type.vecsize)
+        {
+        case 1:
+            store_op = "store";
+            break;
+        case 2:
+            store_op = "store2";
+            break;
+        case 3:
+            store_op = "store3";
+            break;
+        case 4:
+            store_op = "store4";
+            break;
+        default:
+            SPIRV_CROSS_THROW("Unknown vector size.");
+        }
+
+        if (type.columns != 1)
+            SPIRV_CROSS_THROW("Writing matrices to RWByteAddressBuffer not yet supported.");
+        if (type.basetype == SPIRType::Struct)
+            SPIRV_CROSS_THROW("Writing structs to RWByteAddressBuffer not yet supported.");
+        if (type.width != 32)
+            SPIRV_CROSS_THROW("Writing types other than 32-bit to RWByteAddressBuffer not yet supported.");
+
+        // currently have         newPosVelo._data[DTid.x].pos.store4(DTid.x * 32 + 0, floatBitsToUint(pos));
+        // want               newPosVelo._data[DTid.x].pos = store4(pos);
+
+        //chain.base = newPosVelo
+
+        auto store_expr = to_expression(ops[1]);
+        statement(chain->base, " = ", store_op, "(", store_expr, ");");
+
+        register_write(ops[0]);
+    }
+    else
+        CompilerGLSL::emit_instruction(instruction);
+}
+
+void CompilerISPC::emit_access_chain(const Instruction &instruction)
+{
+    auto ops = stream(instruction);
+    uint32_t length = instruction.length;
+
+    bool need_byte_access_chain = false;
+    auto &type = expression_type(ops[2]);
+    const SPIRAccessChain *chain = nullptr;
+    if (has_decoration(type.self, DecorationBufferBlock))
+    {
+        // If we are starting to poke into an SSBO, we are dealing with ByteAddressBuffers, and we need
+        // to emit SPIRAccessChain rather than a plain SPIRExpression.
+        uint32_t chain_arguments = length - 3;
+        if (chain_arguments > type.array.size())
+            need_byte_access_chain = true;
+    }
+    else
+    {
+        // Keep tacking on an existing access chain.
+        chain = maybe_get<SPIRAccessChain>(ops[2]);
+        if (chain)
+            need_byte_access_chain = true;
+    }
+
+    if (need_byte_access_chain)
+    {
+        auto *var = maybe_get<SPIRVariable>(ops[2]);
+        if (var)
+            flush_variable_declaration(var->self);
+
+        // If the base is immutable, the access chain pointer must also be.
+        // If an expression is mutable and forwardable, we speculate that it is immutable.
+        bool need_transpose;
+        auto ac = access_chain(ops[2], &ops[3], length - 3, get<SPIRType>(ops[0]), &need_transpose);
+
+        uint32_t to_plain_buffer_length = type.array.size();
+
+        string base = ac;
+
+        auto *basetype = &type;
+
+        // Start traversing type hierarchy at the proper non-pointer types.
+        while (basetype->pointer)
+        {
+            assert(basetype->parent_type);
+            basetype = &get<SPIRType>(basetype->parent_type);
+        }
+
+        // Traverse the type hierarchy down to the actual buffer types.
+        for (uint32_t i = 0; i < to_plain_buffer_length; i++)
+        {
+            assert(basetype->parent_type);
+            basetype = &get<SPIRType>(basetype->parent_type);
+        }
+        uint32_t matrix_stride = 0;
+        auto offsets =
+            flattened_access_chain_offset(*basetype, &ops[3 + to_plain_buffer_length],
+                length - 3 - to_plain_buffer_length, 0, 1, &need_transpose, &matrix_stride);
+
+        auto &e = set<SPIRAccessChain>(ops[1], ops[0], type.storage, base, offsets.first, offsets.second);
+        if (chain)
+        {
+            e.dynamic_index += chain->dynamic_index;
+            e.static_index += chain->static_index;
+        }
+
+        e.immutable = should_forward(ops[2]);
+    }
+    else
+    {
+        CompilerGLSL::emit_instruction(instruction);
+    }
+}
+
+string CompilerISPC::layout_for_member(const SPIRType &, uint32_t)
+{
+    return "";
 }
