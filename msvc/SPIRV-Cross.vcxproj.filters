@@ -13,6 +13,9 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="Include">
+      <UniqueIdentifier>{bbe95180-6cbd-49f2-9945-bcf3afea2a2a}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\main.cpp">
@@ -34,6 +37,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\spirv_hlsl.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\spirv_ispc.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -64,6 +70,27 @@
     </ClInclude>
     <ClInclude Include="..\spirv_hlsl.hpp">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\spirv_ispc.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\spirv_cross\barrier.hpp">
+      <Filter>Include</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\spirv_cross\external_interface.h">
+      <Filter>Include</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\spirv_cross\image.hpp">
+      <Filter>Include</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\spirv_cross\internal_interface.hpp">
+      <Filter>Include</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\spirv_cross\sampler.hpp">
+      <Filter>Include</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\spirv_cross\thread_group.hpp">
+      <Filter>Include</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

@@ -16,6 +16,7 @@
 
 #include "spirv_cpp.hpp"
 #include "spirv_hlsl.hpp"
+#include "spirv_ispc.hpp"
 #include "spirv_msl.hpp"
 #include <algorithm>
 #include <cstdio>
@@ -457,6 +458,7 @@ struct CLIArguments
 	bool flatten_multidimensional_arrays = false;
 	bool remove_unused = false;
 	bool cfg_analysis = true;
+	bool ispc = false;
 };
 
 static void print_help()
@@ -609,6 +611,7 @@ int main(int argc, char *argv[])
 	cbs.add("--msl", [&args](CLIParser &) { args.msl = true; });
 	cbs.add("--hlsl", [&args](CLIParser &) { args.hlsl = true; });
 	cbs.add("--hlsl-enable-compat", [&args](CLIParser &) { args.hlsl_compat = true; });
+    cbs.add("--ispc", [&args](CLIParser &) { args.ispc = true; });
 	cbs.add("--vulkan-semantics", [&args](CLIParser &) { args.vulkan_semantics = true; });
 	cbs.add("--flatten-multidimensional-arrays", [&args](CLIParser &) { args.flatten_multidimensional_arrays = true; });
 	cbs.add("--extension", [&args](CLIParser &parser) { args.extensions.push_back(parser.next_string()); });
@@ -697,6 +700,8 @@ int main(int argc, char *argv[])
 	}
 	else if (args.hlsl)
 		compiler = unique_ptr<CompilerHLSL>(new CompilerHLSL(read_spirv_file(args.input)));
+	else if (args.ispc)
+		compiler = unique_ptr<CompilerISPC>(new CompilerISPC(read_spirv_file(args.input)));
 	else
 	{
 		combined_image_samplers = !args.vulkan_semantics;

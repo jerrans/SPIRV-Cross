@@ -2126,7 +2126,7 @@ string CompilerGLSL::constant_expression_vector(const SPIRConstant &c, uint32_t 
 
 	string res;
 	if (c.vector_size() > 1)
-		res += type_to_glsl(type) + "(";
+		res += type_to_glsl_constructor(type) + "(";
 
 	bool splat = backend.use_constructor_splatting && c.vector_size() > 1;
 	if (splat)
@@ -2319,7 +2319,7 @@ string CompilerGLSL::declare_temporary(uint32_t result_type, uint32_t result_id)
 	else
 	{
 		// The result_id has not been made into an expression yet, so use flags interface.
-		return join(flags_to_precision_qualifiers_glsl(type, flags), variable_decl(type, to_name(result_id)), " = ");
+		return join(flags_to_precision_qualifiers_glsl(type, flags), variable_decl(type, to_name(result_id), result_id), " = ");
 	}
 }
 

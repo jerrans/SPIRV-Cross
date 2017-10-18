@@ -2,6 +2,8 @@
 
 SPIRV-Cross is a tool designed for parsing and converting SPIR-V to other shader languages.
 
+Intel modifications are to add ISPC output support, primarily for SPIRV compute shaders from HLSL/GLSL. This is very much a WIP project.
+
 [![Build Status](https://travis-ci.org/KhronosGroup/SPIRV-Cross.svg?branch=master)](https://travis-ci.org/KhronosGroup/SPIRV-Cross)
 
 ## Features
@@ -10,6 +12,7 @@ SPIRV-Cross is a tool designed for parsing and converting SPIR-V to other shader
   - Convert SPIR-V to readable, usable and efficient Metal Shading Language (MSL) [EXPERIMENTAL]
   - Convert SPIR-V to readable, usable and efficient HLSL [EXPERIMENTAL]
   - Convert SPIR-V to debuggable C++ [EXPERIMENTAL]
+  - Convert SPIR-V to readable ISPC [WIP EXPERIMENTAL]
   - Reflection API to simplify the creation of Vulkan pipeline layouts
   - Reflection API to modify and tweak OpDecorations
   - Supports "all" of vertex, fragment, tessellation, geometry and compute shaders.
@@ -100,6 +103,13 @@ glslangValidator -H -V -o test.spv test.frag
 ```
 glslangValidator -H -V -o test.spv shaders/comp/basic.comp
 ./spirv-cross --version 310 --es test.spv
+```
+
+### Converting a SPIR-V file to ISPC
+
+```
+glslangValidator -H -V -o test.spv shaders/comp/basic.comp
+./spirv-cross --ispc test.spv --output test.ispc
 ```
 
 #### Converting to desktop GLSL
