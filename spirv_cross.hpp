@@ -172,10 +172,10 @@ public:
 
 	// Returns the qualified member identifier for OpTypeStruct ID, member number "index",
 	// or an empty string if no qualified alias exists
-	const std::string &get_member_qualified_name(uint32_t id, uint32_t index) const;
+	const std::string &get_member_qualified_name(uint32_t type_id, uint32_t index) const;
 
 	// Sets the qualified member identifier for OpTypeStruct ID, member number "index".
-	void set_member_qualified_name(uint32_t id, uint32_t index, const std::string &name);
+	void set_member_qualified_name(uint32_t type_id, uint32_t index, const std::string &name);
 
 	// Gets the decoration mask for a member of a struct, similar to get_decoration_mask.
 	uint64_t get_member_decoration_mask(uint32_t id, uint32_t index) const;
@@ -358,6 +358,12 @@ public:
 	// To rely on this functionality, ensure that the SPIR-V module is not stripped.
 	bool buffer_get_hlsl_counter_buffer(uint32_t id, uint32_t &counter_id) const;
 
+	// Gets the list of all SPIR-V Capabilities which were declared in the SPIR-V module.
+	const std::vector<spv::Capability> &get_declared_capabilities() const;
+
+	// Gets the list of all SPIR-V extensions which were declared in the SPIR-V module.
+	const std::vector<std::string> &get_declared_extensions() const;
+
 protected:
 	const uint32_t *stream(const Instruction &instr) const
 	{
@@ -455,6 +461,8 @@ protected:
 	bool is_scalar(const SPIRType &type) const;
 	bool is_vector(const SPIRType &type) const;
 	bool is_matrix(const SPIRType &type) const;
+	bool is_array(const SPIRType &type) const;
+	uint32_t expression_type_id(uint32_t id) const;
 	const SPIRType &expression_type(uint32_t id) const;
 	bool expression_is_lvalue(uint32_t id) const;
 	bool variable_storage_is_aliased(const SPIRVariable &var);
@@ -522,7 +530,6 @@ protected:
 
 	void analyze_variable_scope(SPIRFunction &function);
 
-protected:
 	void parse();
 	void parse(const Instruction &i);
 
@@ -644,7 +651,8 @@ protected:
 
 	void analyze_parameter_preservation(
 	    SPIRFunction &entry, const CFG &cfg,
-	    const std::unordered_map<uint32_t, std::unordered_set<uint32_t>> &variable_to_blocks);
+	    const std::unordered_map<uint32_t, std::unordered_set<uint32_t>> &variable_to_blocks,
+	    const std::unordered_map<uint32_t, std::unordered_set<uint32_t>> &complete_write_blocks);
 
 	// If a variable ID or parameter ID is found in this set, a sampler is actually a shadow/comparison sampler.
 	// SPIR-V does not support this distinction, so we must keep track of this information outside the type system.
@@ -668,6 +676,11 @@ protected:
 
 		void add_hierarchy_to_comparison_samplers(uint32_t sampler);
 	};
+
+	void make_constant_null(uint32_t id, uint32_t type);
+
+	std::vector<spv::Capability> declared_capabilities;
+	std::vector<std::string> declared_extensions;
 };
 }
 

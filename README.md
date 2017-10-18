@@ -246,10 +246,24 @@ This can be done with `Compiler::set_decoration(id, spv::DecorationDescriptorSet
 
 #### Linking by name for targets which do not support explicit locations (legacy GLSL/ESSL)
 
-Modern GLSL and HLSL sources will rely on explicit layout(location) qualifiers to guide the linking process,
-but legacy GLSL relies on symbol names to perform the linking. When emitting legacy shaders, these layout statements will be dropped,
-so it is important that the API user ensures that the names of I/O variables are sanitized to ensure that linking will work properly.
+Modern GLSL and HLSL sources (and SPIR-V) relies on explicit layout(location) qualifiers to guide the linking process between shader stages,
+but older GLSL relies on symbol names to perform the linking. When emitting shaders with older versions, these layout statements will be removed,
+so it is important that the API user ensures that the names of I/O variables are sanitized so that linking will work properly.
 The reflection API can rename variables, struct types and struct members to deal with these scenarios using `Compiler::set_name` and friends.
+
+#### Clip-space conventions
+
+SPIRV-Cross can perform some common clip space conversions on gl_Position/SV_Position by enabling `CompilerGLSL::Options.vertex.fixup_clipspace`.
+While this can be convenient, it is recommended to modify the projection matrices instead as that can achieve the same result.
+
+For GLSL targets, enabling this will convert a shader which assumes `[0, w]` depth range (Vulkan / D3D / Metal) into `[-w, w]` range.
+For MSL and HLSL targets, enabling this will convert a shader in `[-w, w]` depth range (OpenGL) to `[0, w]` depth range.
+
+By default, the CLI will not enable `fixup_clipspace`, but in the API you might want to set an explicit value using `CompilerGLSL::set_options()`.
+
+Y-flipping of gl_Position and similar is also supported.
+The use of this is discouraged, because relying on vertex shader Y-flipping tends to get quite messy.
+To enable this, set `CompilerGLSL::Options.vertex.flip_vert_y` or `--flip-vert-y` in CLI.
 
 ## Contributing
 

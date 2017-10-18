@@ -15,6 +15,7 @@
  */
 
 #include "spirv_cpp.hpp"
+#include "spirv_glsl.hpp"
 #include "spirv_hlsl.hpp"
 #include "spirv_ispc.hpp"
 #include "spirv_msl.hpp"
@@ -399,6 +400,21 @@ static void print_spec_constants(const Compiler &compiler)
 	fprintf(stderr, "==================\n\n");
 }
 
+static void print_capabilities_and_extensions(const Compiler &compiler)
+{
+	fprintf(stderr, "Capabilities\n");
+	fprintf(stderr, "============\n");
+	for (auto &capability : compiler.get_declared_capabilities())
+		fprintf(stderr, "Capability: %u\n", static_cast<unsigned>(capability));
+	fprintf(stderr, "============\n\n");
+
+	fprintf(stderr, "Extensions\n");
+	fprintf(stderr, "============\n");
+	for (auto &ext : compiler.get_declared_extensions())
+		fprintf(stderr, "Extension: %s\n", ext.c_str());
+	fprintf(stderr, "============\n\n");
+}
+
 struct PLSArg
 {
 	PlsFormat format;
@@ -440,6 +456,7 @@ struct CLIArguments
 	bool force_temporary = false;
 	bool flatten_ubo = false;
 	bool fixup = false;
+	bool yflip = false;
 	bool sso = false;
 	vector<PLSArg> pls_in;
 	vector<PLSArg> pls_out;
@@ -465,7 +482,7 @@ static void print_help()
 {
 	fprintf(stderr, "Usage: spirv-cross [--output <output path>] [SPIR-V file] [--es] [--no-es] [--no-cfg-analysis] "
 	                "[--version <GLSL version>] [--dump-resources] [--help] [--force-temporary] "
-	                "[--vulkan-semantics] [--flatten-ubo] [--fixup-clipspace] [--iterations iter] "
+	                "[--vulkan-semantics] [--flatten-ubo] [--fixup-clipspace] [--flip-vert-y] [--iterations iter] "
 	                "[--cpp] [--cpp-interface-name <name>] "
 	                "[--msl] "
 	                "[--hlsl] [--shader-model] [--hlsl-enable-compat] "
@@ -475,7 +492,7 @@ static void print_help()
 	                "[--flatten-multidimensional-arrays] "
 	                "[--remap-variable-type <variable_name> <new_variable_type>] "
 	                "[--rename-interface-variable <in|out> <location> <new_variable_name>] "
-					"\n");
+	                "\n");
 }
 
 static bool remap_generic(Compiler &compiler, const vector<Resource> &resources, const Remap &remap)
@@ -562,7 +579,8 @@ static PlsFormat pls_format(const char *str)
 		return PlsNone;
 }
 
-void rename_interface_variable(Compiler &compiler, const vector<Resource> &resources, const InterfaceVariableRename &rename)
+void rename_interface_variable(Compiler &compiler, const vector<Resource> &resources,
+                               const InterfaceVariableRename &rename)
 {
 	for (auto &v : resources)
 	{
@@ -604,6 +622,7 @@ int main(int argc, char *argv[])
 	cbs.add("--force-temporary", [&args](CLIParser &) { args.force_temporary = true; });
 	cbs.add("--flatten-ubo", [&args](CLIParser &) { args.flatten_ubo = true; });
 	cbs.add("--fixup-clipspace", [&args](CLIParser &) { args.fixup = true; });
+	cbs.add("--flip-vert-y", [&args](CLIParser &) { args.yflip = true; });
 	cbs.add("--iterations", [&args](CLIParser &parser) { args.iterations = parser.next_uint(); });
 	cbs.add("--cpp", [&args](CLIParser &) { args.cpp = true; });
 	cbs.add("--cpp-interface-name", [&args](CLIParser &parser) { args.cpp_interface_name = parser.next_string(); });
@@ -739,6 +758,7 @@ int main(int argc, char *argv[])
 	opts.flatten_multidimensional_arrays = args.flatten_multidimensional_arrays;
 	opts.vulkan_semantics = args.vulkan_semantics;
 	opts.vertex.fixup_clipspace = args.fixup;
+	opts.vertex.flip_vert_y = args.yflip;
 	opts.cfg_analysis = args.cfg_analysis;
 	compiler->set_options(opts);
 
@@ -801,7 +821,7 @@ int main(int argc, char *argv[])
 			continue;
 	}
 
-	for (auto &rename : args.interface_variable_renames) 
+	for (auto &rename : args.interface_variable_renames)
 	{
 		if (rename.storageClass == StorageClassInput)
 			rename_interface_variable(*compiler, res.stage_inputs, rename);
@@ -819,6 +839,7 @@ int main(int argc, char *argv[])
 		print_resources(*compiler, res);
 		print_push_constant_resources(*compiler, res.push_constant_buffers);
 		print_spec_constants(*compiler);
+		print_capabilities_and_extensions(*compiler);
 	}
 
 	if (combined_image_samplers)

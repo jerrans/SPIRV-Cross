@@ -87,6 +87,8 @@ string CompilerMSL::compile()
 	update_active_builtins();
 	fixup_image_load_store_access();
 
+	set_enabled_interface_variables(get_active_interface_variables());
+
 	// Preprocess OpCodes to extract the need to output additional header content
 	preprocess_op_codes();
 
@@ -104,7 +106,6 @@ string CompilerMSL::compile()
 	CompilerGLSL::options.vulkan_semantics = true;
 	CompilerGLSL::options.es = false;
 	CompilerGLSL::options.version = 120;
-	CompilerGLSL::options.vertex.fixup_clipspace = false;
 	backend.float_literal_suffix = false;
 	backend.uint32_t_literal_suffix = true;
 	backend.basic_int_type = "int";
@@ -168,7 +169,6 @@ string CompilerMSL::compile(MSLConfiguration &msl_cfg, vector<MSLVertexAttr> *p_
 // Register the need to output any custom functions.
 void CompilerMSL::preprocess_op_codes()
 {
-	set_enabled_interface_variables(get_active_interface_variables());
 	spv_function_implementations.clear();
 
 	OpCodePreprocessor preproc(*this);
@@ -389,6 +389,7 @@ uint32_t CompilerMSL::add_interface_block(StorageClass storage)
 	case StorageClassUniformConstant:
 	{
 		ib_var_ref = stage_uniform_var_name;
+		active_interface_variables.insert(ib_var_id); // Ensure will be emitted
 		break;
 	}
 
@@ -413,10 +414,9 @@ uint32_t CompilerMSL::add_interface_block(StorageClass storage)
 				bool is_builtin = is_member_builtin(type, mbr_idx, &builtin);
 
 				auto &mbr_type = get<SPIRType>(mbr_type_id);
-				if (is_matrix(mbr_type))
-				{
-					exclude_member_from_stage_in(type, mbr_idx);
-				}
+				if (should_move_to_input_buffer(mbr_type, is_builtin, storage))
+					move_member_to_input_buffer(type, mbr_idx);
+
 				else if (!is_builtin || has_active_builtin(builtin, storage))
 				{
 					// Add a reference to the member to the interface struct.
@@ -467,8 +467,8 @@ uint32_t CompilerMSL::add_interface_block(StorageClass storage)
 			bool is_builtin = is_builtin_variable(*p_var);
 			BuiltIn builtin = BuiltIn(get_decoration(p_var->self, DecorationBuiltIn));
 
-			if (is_matrix(type))
-				exclude_from_stage_in(*p_var);
+			if (should_move_to_input_buffer(type, is_builtin, storage))
+				move_to_input_buffer(*p_var);
 
 			else if (!is_builtin || has_active_builtin(builtin, storage))
 			{
@@ -503,34 +503,58 @@ uint32_t CompilerMSL::add_interface_block(StorageClass storage)
 		}
 	}
 
-	// Sort the members of the interface structure by their attribute numbers.
-	// Oddly, Metal handles inputs better if they are sorted in reverse order,
-	// particularly if the offsets are all equal.
+	// Sort the members of the structure by their locations.
+	// Oddly, Metal handles inputs better if they are sorted in reverse order.
 	MemberSorter::SortAspect sort_aspect =
 	    (storage == StorageClassInput) ? MemberSorter::LocationReverse : MemberSorter::Location;
 	MemberSorter member_sorter(ib_type, meta[ib_type_id], sort_aspect);
 	member_sorter.sort();
 
-	// Sort input or output variables alphabetical
-	auto &execution = get_entry_point();
-	if ((execution.model == ExecutionModelFragment && storage == StorageClassInput) ||
-	    (execution.model == ExecutionModelVertex && storage == StorageClassOutput))
-	{
-		MemberSorter member_sorter_io(ib_type, meta[ib_type.self], MemberSorter::Alphabetical);
-		member_sorter_io.sort();
-	}
-
 	return ib_var_id;
 }
 
-// Excludes the specified input variable from the stage_in block structure.
-// Instead, the variable is added to a block variable corresponding to a secondary MSL buffer.
-// The main use case for this is when a stage_in variable contains a matrix, which is a rare occurrence.
-void CompilerMSL::exclude_from_stage_in(SPIRVariable &var)
+// Returns whether a variable of type and storage class should be moved from an interface
+// block to a secondary input buffer block.
+// This is the case for matrixes and arrays that appear in the stage_in interface block
+// of a vertex function, and true is returned.
+// Other types do not need to move, and false is returned.
+// Matrices and arrays are not permitted in the output of a vertex function or the input
+// or output of a fragment function, and in those cases, an exception is thrown.
+bool CompilerMSL::should_move_to_input_buffer(SPIRType &type, bool is_builtin, StorageClass storage)
+{
+	if ((is_matrix(type) || is_array(type)) && !is_builtin)
+	{
+		auto &execution = get_entry_point();
+
+		if (execution.model == ExecutionModelVertex)
+		{
+			if (storage == StorageClassInput)
+				return true;
+
+			if (storage == StorageClassOutput)
+				SPIRV_CROSS_THROW("The vertex function output structure may not include a matrix or array.");
+		}
+		else if (execution.model == ExecutionModelFragment)
+		{
+			if (storage == StorageClassInput)
+				SPIRV_CROSS_THROW("The fragment function stage_in structure may not include a matrix or array.");
+
+			if (storage == StorageClassOutput)
+				SPIRV_CROSS_THROW("The fragment function output structure may not include a matrix or array.");
+		}
+	}
+
+	return false;
+}
+
+// Excludes the specified variable from an interface block structure.
+// Instead, for the variable is added to a block variable corresponding to a secondary MSL buffer.
+// The use case for this is when a vertex stage_in variable contains a matrix or array.
+void CompilerMSL::move_to_input_buffer(SPIRVariable &var)
 {
 	uint32_t var_id = var.self;
 
-	if (!(get_decoration_mask(var_id) & (1ull << DecorationLocation)))
+	if (!has_decoration(var_id, DecorationLocation))
 		return;
 
 	uint32_t mbr_type_id = var.basetype;
@@ -540,9 +564,9 @@ void CompilerMSL::exclude_from_stage_in(SPIRVariable &var)
 }
 
 // Excludes the specified type member from the stage_in block structure.
-// Instead, the member is added to a block variable corresponding to a secondary MSL buffer.
-// The main use case for this is when a stage_in variable contains a matrix, which is a rare occurrence.
-void CompilerMSL::exclude_member_from_stage_in(const SPIRType &type, uint32_t index)
+// Instead, for the variable is added to a block variable corresponding to a secondary MSL buffer.
+// The use case for this is when a vertex stage_in variable contains a matrix or array.
+void CompilerMSL::move_member_to_input_buffer(const SPIRType &type, uint32_t index)
 {
 	uint32_t type_id = type.self;
 
@@ -591,7 +615,8 @@ string CompilerMSL::add_input_buffer_block_member(uint32_t mbr_type_id, string m
 	set_member_decoration(ib_type_id, ib_mbr_idx, DecorationLocation, k_unknown_location);
 
 	// Update the original variable reference to include the structure and index reference
-	string idx_var_name = builtin_to_glsl(p_va->per_instance ? BuiltInInstanceIndex : BuiltInVertexIndex);
+	string idx_var_name =
+	    builtin_to_glsl(p_va->per_instance ? BuiltInInstanceIndex : BuiltInVertexIndex, StorageClassInput);
 	return get_name(ib_var_id) + "[" + idx_var_name + "]." + mbr_name;
 }
 
@@ -989,6 +1014,8 @@ void CompilerMSL::emit_resources()
 		}
 	}
 
+	declare_undefined_values();
+
 	// Output interface blocks.
 	emit_interface_block(stage_in_var_id);
 	for (auto &nsi_var : non_stage_in_input_var_ids)
@@ -1376,12 +1403,75 @@ void CompilerMSL::emit_instruction(const Instruction &instruction)
 		break;
 	}
 
+	case OpStore:
+	{
+		if (!maybe_emit_input_struct_assignment(ops[0], ops[1]))
+			CompilerGLSL::emit_instruction(instruction);
+
+		break;
+	}
+
 	// OpOuterProduct
 
 	default:
 		CompilerGLSL::emit_instruction(instruction);
 		break;
 	}
+}
+
+// Since MSL does not allow structs to be nested within the stage_in struct, the original
+// input structs are flattened into a single stage_in struct by add_interface_block.
+// As a result, if the LHS and RHS represent an assignment of an entire input struct,
+// we must perform this member-by-member, mapping to the flattened stage_in struct.
+// Returns whether the struct assignment was emitted.
+bool CompilerMSL::maybe_emit_input_struct_assignment(uint32_t id_lhs, uint32_t id_rhs)
+{
+	auto *p_v_lhs = maybe_get_backing_variable(id_lhs);
+	auto *p_v_rhs = maybe_get_backing_variable(id_rhs);
+
+	if (p_v_lhs && p_v_rhs && p_v_rhs->storage == StorageClassInput)
+	{
+		uint32_t tid_lhs = p_v_lhs->basetype;
+		uint32_t tid_rhs = p_v_rhs->basetype;
+
+		auto &t_lhs = get<SPIRType>(tid_lhs);
+		auto &t_rhs = get<SPIRType>(tid_rhs);
+
+		if (t_lhs.basetype == SPIRType::Struct && t_rhs.basetype == SPIRType::Struct)
+		{
+			size_t mbr_cnt = t_rhs.member_types.size();
+			assert(t_lhs.member_types.size() == mbr_cnt);
+
+			flush_variable_declaration(p_v_lhs->self);
+
+			for (uint32_t mbr_idx = 0; mbr_idx < mbr_cnt; mbr_idx++)
+			{
+				string expr;
+
+				//LHS
+				expr += to_name(id_lhs);
+				expr += ".";
+				expr += to_member_name(t_lhs, mbr_idx);
+
+				expr += " = ";
+
+				//RHS
+				string qual_mbr_name = get_member_qualified_name(tid_rhs, mbr_idx);
+				if (qual_mbr_name.empty())
+				{
+					expr += to_name(id_rhs);
+					expr += ".";
+					expr += to_member_name(t_rhs, mbr_idx);
+				}
+				else
+					expr += qual_mbr_name;
+
+				statement(expr, ";");
+			}
+			return true;
+		}
+	}
+	return false;
 }
 
 // Emits one of the atomic functions. In MSL, the atomic functions operate on pointers
@@ -1926,7 +2016,7 @@ void CompilerMSL::emit_fixup()
 			          ".w) * 0.5;       // Adjust clip-space for Metal");
 		}
 
-		if (options.flip_vert_y)
+		if (CompilerGLSL::options.vertex.flip_vert_y)
 			statement(qual_pos_var_name, ".y = -(", qual_pos_var_name, ".y);", "    // Invert Y-axis for Metal");
 	}
 }
@@ -2385,7 +2475,7 @@ string CompilerMSL::to_qualified_member_name(const SPIRType &type, uint32_t inde
 	// Don't qualify Builtin names because they are unique and are treated as such when building expressions
 	BuiltIn builtin;
 	if (is_member_builtin(type, index, &builtin))
-		return builtin_to_glsl(builtin);
+		return builtin_to_glsl(builtin, type.storage);
 
 	// Strip any underscore prefix from member name
 	string mbr_name = to_member_name(type, index);
@@ -2490,8 +2580,14 @@ string CompilerMSL::image_type_glsl(const SPIRType &type, uint32_t id)
 	{
 		switch (img_type.dim)
 		{
+		case Dim1D:
+			img_type_name += "depth1d_unsupported_by_metal";
+			break;
 		case Dim2D:
 			img_type_name += (img_type.ms ? "depth2d_ms" : (img_type.arrayed ? "depth2d_array" : "depth2d"));
+			break;
+		case Dim3D:
+			img_type_name += "depth3d_unsupported_by_metal";
 			break;
 		case DimCube:
 			img_type_name += (img_type.arrayed ? "depthcube_array" : "depthcube");
@@ -2592,7 +2688,7 @@ string CompilerMSL::bitcast_glsl_op(const SPIRType &out_type, const SPIRType &in
 
 // Returns an MSL string identifying the name of a SPIR-V builtin.
 // Output builtins are qualified with the name of the stage out structure.
-string CompilerMSL::builtin_to_glsl(BuiltIn builtin)
+string CompilerMSL::builtin_to_glsl(BuiltIn builtin, StorageClass storage)
 {
 	switch (builtin)
 	{
@@ -2607,18 +2703,19 @@ string CompilerMSL::builtin_to_glsl(BuiltIn builtin)
 	case BuiltInInstanceIndex:
 		return "gl_InstanceIndex";
 
-	// Output builtins qualified with output struct when used in the entry function
+	// When used in the entry function, output builtins are qualified with output struct name.
 	case BuiltInPosition:
 	case BuiltInPointSize:
 	case BuiltInClipDistance:
 	case BuiltInLayer:
+	case BuiltInFragDepth:
 		if (current_function && (current_function->self == entry_point))
-			return stage_out_var_name + "." + CompilerGLSL::builtin_to_glsl(builtin);
+			return stage_out_var_name + "." + CompilerGLSL::builtin_to_glsl(builtin, storage);
 		else
-			return CompilerGLSL::builtin_to_glsl(builtin);
+			return CompilerGLSL::builtin_to_glsl(builtin, storage);
 
 	default:
-		return CompilerGLSL::builtin_to_glsl(builtin);
+		return CompilerGLSL::builtin_to_glsl(builtin, storage);
 	}
 }
 
@@ -2663,16 +2760,12 @@ string CompilerMSL::builtin_qualifier(BuiltIn builtin)
 
 	// Fragment function out
 	case BuiltInFragDepth:
-	{
 		if (execution.flags & (1ull << ExecutionModeDepthGreater))
 			return "depth(greater)";
 		else if (execution.flags & (1ull << ExecutionModeDepthLess))
 			return "depth(less)";
-		else if (execution.flags & (1ull << ExecutionModeDepthUnchanged))
-			return "depth(any)";
 		else
 			return "depth(any)";
-	}
 
 	// Compute function in
 	case BuiltInGlobalInvocationId:
@@ -2744,7 +2837,10 @@ string CompilerMSL::built_in_func_arg(BuiltIn builtin, bool prefix_comma)
 	if (prefix_comma)
 		bi_arg += ", ";
 	bi_arg += builtin_type_decl(builtin);
-	bi_arg += " " + builtin_to_glsl(builtin);
+
+	assert(builtin == BuiltInVertexIndex || builtin == BuiltInInstanceIndex);
+	bi_arg += " " + builtin_to_glsl(builtin, StorageClassInput);
+
 	bi_arg += " [[" + builtin_qualifier(builtin) + "]]";
 	return bi_arg;
 }
@@ -2987,7 +3083,7 @@ bool CompilerMSL::MemberSorter::operator()(uint32_t mbr_idx1, uint32_t mbr_idx2)
 			return (mbr_meta1.offset < mbr_meta2.offset) ||
 			       ((mbr_meta1.offset == mbr_meta2.offset) && (mbr_meta1.location > mbr_meta2.location));
 		case Alphabetical:
-			return mbr_meta1.alias > mbr_meta2.alias;
+			return mbr_meta1.alias < mbr_meta2.alias;
 		default:
 			return false;
 		}

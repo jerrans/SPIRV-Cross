@@ -89,8 +89,13 @@ public:
 
 		struct
 		{
-			// In vertex shaders, rewrite [0, w] depth (Vulkan/D3D style) to [-w, w] depth (GL style).
-			bool fixup_clipspace = true;
+			// GLSL: In vertex shaders, rewrite [0, w] depth (Vulkan/D3D style) to [-w, w] depth (GL style).
+			// MSL: In vertex shaders, rewrite [-w, w] depth (GL style) to [0, w] depth.
+			// HLSL: In vertex shaders, rewrite [-w, w] depth (GL style) to [0, w] depth.
+			bool fixup_clipspace = false;
+
+			// Inverts gl_Position.y or equivalent.
+			bool flip_vert_y = false;
 		} vertex;
 
 		struct
@@ -172,7 +177,7 @@ protected:
 	virtual void emit_sampled_image_op(uint32_t result_type, uint32_t result_id, uint32_t image_id, uint32_t samp_id);
 	virtual void emit_texture_op(const Instruction &i);
 	virtual std::string type_to_glsl(const SPIRType &type, uint32_t id = 0);
-	virtual std::string builtin_to_glsl(spv::BuiltIn builtin);
+	virtual std::string builtin_to_glsl(spv::BuiltIn builtin, spv::StorageClass storage);
 	virtual void emit_struct_member(const SPIRType &type, uint32_t member_type_id, uint32_t index,
 	                                const std::string &qualifier = "");
 	virtual std::string image_type_glsl(const SPIRType &type, uint32_t id = 0);
@@ -354,9 +359,9 @@ protected:
 	std::string flattened_access_chain_vector(uint32_t base, const uint32_t *indices, uint32_t count,
 	                                          const SPIRType &target_type, uint32_t offset, uint32_t matrix_stride,
 	                                          bool need_transpose);
-	std::pair<std::string, uint32_t> flattened_access_chain_offset(uint32_t base, const uint32_t *indices,
+	std::pair<std::string, uint32_t> flattened_access_chain_offset(const SPIRType &basetype, const uint32_t *indices,
 	                                                               uint32_t count, uint32_t offset,
-	                                                               bool *need_transpose = nullptr,
+	                                                               uint32_t word_stride, bool *need_transpose = nullptr,
 	                                                               uint32_t *matrix_stride = nullptr);
 
 	const char *index_to_swizzle(uint32_t index);
@@ -463,6 +468,8 @@ protected:
 	void fixup_image_load_store_access();
 
 	bool type_is_empty(const SPIRType &type);
+
+	void declare_undefined_values();
 
 private:
 	void init()

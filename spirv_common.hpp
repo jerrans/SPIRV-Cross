@@ -187,6 +187,7 @@ enum Types
 	TypeExpression,
 	TypeConstantOp,
 	TypeCombinedImageSampler,
+	TypeAccessChain,
 	TypeUndef
 };
 
@@ -606,6 +607,39 @@ struct SPIRFunction : IVariant
 	bool analyzed_variable_scope = false;
 };
 
+struct SPIRAccessChain : IVariant
+{
+	enum
+	{
+		type = TypeAccessChain
+	};
+
+	SPIRAccessChain(uint32_t basetype_, spv::StorageClass storage_, std::string base_, std::string dynamic_index_,
+	                int32_t static_index_)
+	    : basetype(basetype_)
+	    , storage(storage_)
+	    , base(base_)
+	    , dynamic_index(std::move(dynamic_index_))
+	    , static_index(static_index_)
+	{
+	}
+
+	// The access chain represents an offset into a buffer.
+	// Some backends need more complicated handling of access chains to be able to use buffers, like HLSL
+	// which has no usable buffer type ala GLSL SSBOs.
+	// StructuredBuffer is too limited, so our only option is to deal with ByteAddressBuffer which works with raw addresses.
+
+	uint32_t basetype;
+	spv::StorageClass storage;
+	std::string base;
+	std::string dynamic_index;
+	int32_t static_index;
+
+	uint32_t loaded_from = 0;
+	bool need_transpose = false;
+	bool immutable = false;
+};
+
 struct SPIRVariable : IVariant
 {
 	enum
@@ -727,6 +761,19 @@ struct SPIRConstant : IVariant
 	inline uint32_t columns() const
 	{
 		return m.columns;
+	}
+
+	inline void make_null(const SPIRType &constant_type_)
+	{
+		std::memset(&m, 0, sizeof(m));
+		m.columns = constant_type_.columns;
+		for (auto &c : m.c)
+			c.vecsize = constant_type_.vecsize;
+	}
+
+	SPIRConstant(uint32_t constant_type_)
+	    : constant_type(constant_type_)
+	{
 	}
 
 	SPIRConstant(uint32_t constant_type_, const uint32_t *elements, uint32_t num_elements)

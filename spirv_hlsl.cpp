@@ -17,6 +17,7 @@
 #include "spirv_hlsl.hpp"
 #include "GLSL.std.450.h"
 #include <algorithm>
+#include <assert.h>
 
 using namespace spv;
 using namespace spirv_cross;
@@ -47,6 +48,8 @@ string CompilerHLSL::image_type_hlsl_modern(const SPIRType &type)
 {
 	auto &imagetype = get<SPIRType>(type.image.type);
 	const char *dim = nullptr;
+	uint32_t components = 4;
+
 	switch (type.image.dim)
 	{
 	case Dim1D:
@@ -62,17 +65,23 @@ string CompilerHLSL::image_type_hlsl_modern(const SPIRType &type)
 		dim = "Cube";
 		break;
 	case DimRect:
-		SPIRV_CROSS_THROW("Rectangle texture support is not yet implemented for HLSL"); // TODO
+		SPIRV_CROSS_THROW("Rectangle texture support is not yet implemented for HLSL."); // TODO
 	case DimBuffer:
-		// Buffer/RWBuffer.
-		SPIRV_CROSS_THROW("Buffer/RWBuffer support is not yet implemented for HLSL"); // TODO
+		if (type.image.sampled == 1)
+			return join("Buffer<", type_to_glsl(imagetype), components, ">");
+		else if (type.image.sampled == 2)
+		{
+			SPIRV_CROSS_THROW("RWBuffer is not implemented yet for HLSL.");
+			//return join("RWBuffer<", type_to_glsl(imagetype), components, ">");
+		}
+		else
+			SPIRV_CROSS_THROW("Sampler buffers must be either sampled or unsampled. Cannot deduce in runtime.");
 	case DimSubpassData:
 		// This should be implemented same way as desktop GL. Fetch on a 2D texture based on int2(SV_Position).
 		SPIRV_CROSS_THROW("Subpass data support is not yet implemented for HLSL"); // TODO
 	default:
 		SPIRV_CROSS_THROW("Invalid dimension.");
 	}
-	uint32_t components = 4;
 	const char *arrayed = type.image.arrayed ? "Array" : "";
 	return join("Texture", dim, arrayed, "<", type_to_glsl(imagetype), components, ">");
 }
@@ -326,7 +335,7 @@ void CompilerHLSL::emit_builtin_outputs_in_struct()
 		}
 
 		if (type && semantic)
-			statement(type, " ", builtin_to_glsl(builtin), " : ", semantic, ";");
+			statement(type, " ", builtin_to_glsl(builtin, StorageClassOutput), " : ", semantic, ";");
 	}
 }
 
@@ -369,13 +378,33 @@ void CompilerHLSL::emit_builtin_inputs_in_struct()
 			semantic = "SV_SampleIndex";
 			break;
 
+		case BuiltInGlobalInvocationId:
+			type = "uint3";
+			semantic = "SV_DispatchThreadID";
+			break;
+
+		case BuiltInLocalInvocationId:
+			type = "uint3";
+			semantic = "SV_GroupThreadID";
+			break;
+
+		case BuiltInLocalInvocationIndex:
+			type = "uint";
+			semantic = "SV_GroupIndex";
+			break;
+
+		case BuiltInWorkgroupId:
+			type = "uint3";
+			semantic = "SV_GroupID";
+			break;
+
 		default:
 			SPIRV_CROSS_THROW("Unsupported builtin in HLSL.");
 			break;
 		}
 
 		if (type && semantic)
-			statement(type, " ", builtin_to_glsl(builtin), " : ", semantic, ";");
+			statement(type, " ", builtin_to_glsl(builtin, StorageClassInput), " : ", semantic, ";");
 	}
 }
 
@@ -569,19 +598,58 @@ void CompilerHLSL::emit_builtin_variables()
 			else
 				SPIRV_CROSS_THROW(join("Unsupported builtin in HLSL: ", unsigned(builtin)));
 
+		case BuiltInGlobalInvocationId:
+		case BuiltInLocalInvocationId:
+		case BuiltInWorkgroupId:
+			type = "uint3";
+			break;
+
+		case BuiltInLocalInvocationIndex:
+			type = "uint";
+			break;
+
 		default:
 			SPIRV_CROSS_THROW(join("Unsupported builtin in HLSL: ", unsigned(builtin)));
 			break;
 		}
 
+		StorageClass storage = (active_input_builtins & (1ull << i)) != 0 ? StorageClassInput : StorageClassOutput;
+		// FIXME: SampleMask can be both in and out with sample builtin,
+		// need to distinguish that when we add support for that.
+
 		if (type)
-			statement("static ", type, " ", builtin_to_glsl(builtin), ";");
+			statement("static ", type, " ", builtin_to_glsl(builtin, storage), ";");
 	}
+}
+
+void CompilerHLSL::emit_specialization_constants()
+{
+	bool emitted = false;
+	for (auto &id : ids)
+	{
+		if (id.get_type() == TypeConstant)
+		{
+			auto &c = id.get<SPIRConstant>();
+			if (!c.specialization)
+				continue;
+
+			auto &type = get<SPIRType>(c.constant_type);
+			auto name = to_name(c.self);
+
+			statement("const ", variable_decl(type, name), " = ", constant_expression(c), ";");
+			emitted = true;
+		}
+	}
+
+	if (emitted)
+		statement("");
 }
 
 void CompilerHLSL::emit_resources()
 {
 	auto &execution = get_entry_point();
+
+	emit_specialization_constants();
 
 	// Output all basic struct types which are not Block or BufferBlock as these are declared inplace
 	// when such variables are instantiated.
@@ -816,6 +884,8 @@ void CompilerHLSL::emit_resources()
 	if (emitted)
 		statement("");
 
+	declare_undefined_values();
+
 	if (requires_op_fmod)
 	{
 		statement("float mod(float x, float y)");
@@ -880,43 +950,54 @@ void CompilerHLSL::emit_buffer_block(const SPIRVariable &var)
 	auto &type = get<SPIRType>(var.basetype);
 
 	bool is_uav = has_decoration(type.self, DecorationBufferBlock);
+
 	if (is_uav)
-		SPIRV_CROSS_THROW("Buffer is SSBO (UAV). This is currently unsupported.");
-
-	add_resource_name(type.self);
-
-	string struct_name;
-	if (options.shader_model >= 51)
-		struct_name = to_name(type.self);
-	else
-		struct_name = join("_", to_name(type.self));
-
-	// First, declare the struct of the UBO.
-	statement("struct ", struct_name);
-	begin_scope();
-
-	type.member_name_cache.clear();
-
-	uint32_t i = 0;
-	for (auto &member : type.member_types)
 	{
-		add_member_name(type, i);
-		emit_struct_member(type, member, i);
-		i++;
-	}
-	end_scope_decl();
-	statement("");
-
-	if (options.shader_model >= 51) // SM 5.1 uses ConstantBuffer<T> instead of cbuffer.
-	{
-		statement("ConstantBuffer<", struct_name, "> ", to_name(var.self), type_to_array_glsl(type), to_resource_binding(var), ";");
+		uint64_t flags = get_buffer_block_flags(var);
+		bool is_readonly = (flags & (1ull << DecorationNonWritable)) != 0;
+		add_resource_name(var.self);
+		statement(is_readonly ? "ByteAddressBuffer " : "RWByteAddressBuffer ", to_name(var.self),
+		          type_to_array_glsl(type), to_resource_binding(var), ";");
 	}
 	else
 	{
-		statement("cbuffer ", to_name(type.self), to_resource_binding(var));
+		add_resource_name(type.self);
+		add_resource_name(var.self);
+
+		string struct_name;
+		if (options.shader_model >= 51)
+			struct_name = to_name(type.self);
+		else
+			struct_name = join("_", to_name(type.self));
+
+		// First, declare the struct of the UBO.
+		statement("struct ", struct_name);
 		begin_scope();
-		statement(struct_name, " ", to_name(var.self), type_to_array_glsl(type), ";");
+
+		type.member_name_cache.clear();
+
+		uint32_t i = 0;
+		for (auto &member : type.member_types)
+		{
+			add_member_name(type, i);
+			emit_struct_member(type, member, i);
+			i++;
+		}
 		end_scope_decl();
+		statement("");
+
+		if (options.shader_model >= 51) // SM 5.1 uses ConstantBuffer<T> instead of cbuffer.
+		{
+			statement("ConstantBuffer<", struct_name, "> ", to_name(var.self), type_to_array_glsl(type),
+			          to_resource_binding(var), ";");
+		}
+		else
+		{
+			statement("cbuffer ", to_name(type.self), to_resource_binding(var));
+			begin_scope();
+			statement(struct_name, " ", to_name(var.self), type_to_array_glsl(type), ";");
+			end_scope_decl();
+		}
 	}
 }
 
@@ -951,7 +1032,7 @@ string CompilerHLSL::to_func_call_arg(uint32_t id)
 		// We don't have to consider combined image samplers here via OpSampledImage because
 		// those variables cannot be passed as arguments to functions.
 		// Only global SampledImage variables may be used as arguments.
-		if (type.basetype == SPIRType::SampledImage)
+		if (type.basetype == SPIRType::SampledImage && type.image.dim != DimBuffer)
 			arg_str += ", " + to_sampler_expression(id);
 	}
 
@@ -974,13 +1055,13 @@ void CompilerHLSL::emit_function_prototype(SPIRFunction &func, uint64_t return_f
 	if (func.self == entry_point)
 	{
 		if (execution.model == ExecutionModelVertex)
-		{
 			decl += "vert_main";
-		}
-		else
-		{
+		else if (execution.model == ExecutionModelFragment)
 			decl += "frag_main";
-		}
+		else if (execution.model == ExecutionModelGLCompute)
+			decl += "comp_main";
+		else
+			SPIRV_CROSS_THROW("Unsupported execution model.");
 		processing_entry_point = true;
 	}
 	else
@@ -999,13 +1080,12 @@ void CompilerHLSL::emit_function_prototype(SPIRFunction &func, uint64_t return_f
 
 		// Flatten a combined sampler to two separate arguments in modern HLSL.
 		auto &arg_type = get<SPIRType>(arg.type);
-		if (options.shader_model > 30 && arg_type.basetype == SPIRType::SampledImage)
+		if (options.shader_model > 30 && arg_type.basetype == SPIRType::SampledImage && arg_type.image.dim != DimBuffer)
 		{
 			// Manufacture automatic sampler arg for SampledImage texture
 			decl += ", ";
-			if (arg_type.basetype == SPIRType::SampledImage)
-				decl += join(arg_type.image.depth ? "SamplerComparisonState " : "SamplerState ",
-				             to_sampler_expression(arg.id));
+			decl +=
+			    join(arg_type.image.depth ? "SamplerComparisonState " : "SamplerState ", to_sampler_expression(arg.id));
 		}
 
 		if (&arg != &func.arguments.back())
@@ -1055,6 +1135,13 @@ void CompilerHLSL::emit_hlsl_entry_point()
 	}
 
 	auto &execution = get_entry_point();
+
+	if (execution.model == ExecutionModelGLCompute)
+	{
+		statement("[numthreads(", execution.workgroup_size.x, ", ", execution.workgroup_size.y, ", ",
+		          execution.workgroup_size.z, ")]");
+	}
+
 	statement(require_output ? "SPIRV_Cross_Output " : "void ", "main(", merge(arguments), ")");
 	begin_scope();
 	bool legacy = options.shader_model <= 30;
@@ -1065,7 +1152,7 @@ void CompilerHLSL::emit_hlsl_entry_point()
 		if (!(active_input_builtins & (1ull << i)))
 			continue;
 
-		auto builtin = builtin_to_glsl(static_cast<BuiltIn>(i));
+		auto builtin = builtin_to_glsl(static_cast<BuiltIn>(i), StorageClassInput);
 		switch (static_cast<BuiltIn>(i))
 		{
 		case BuiltInFragCoord:
@@ -1133,6 +1220,8 @@ void CompilerHLSL::emit_hlsl_entry_point()
 		statement("vert_main();");
 	else if (execution.model == ExecutionModelFragment)
 		statement("frag_main();");
+	else if (execution.model == ExecutionModelGLCompute)
+		statement("comp_main();");
 	else
 		SPIRV_CROSS_THROW("Unsupported shader stage.");
 
@@ -1172,7 +1261,7 @@ void CompilerHLSL::emit_hlsl_entry_point()
 			if (i == BuiltInPointSize)
 				continue;
 
-			auto builtin = builtin_to_glsl(static_cast<BuiltIn>(i));
+			auto builtin = builtin_to_glsl(static_cast<BuiltIn>(i), StorageClassOutput);
 			statement("stage_output.", builtin, " = ", builtin, ";");
 		}
 
@@ -1196,31 +1285,27 @@ void CompilerHLSL::emit_hlsl_entry_point()
 			}
 		}
 
-		if (execution.model == ExecutionModelVertex)
-		{
-			// Do various mangling on the gl_Position.
-			if (options.shader_model <= 30)
-			{
-				statement("stage_output.gl_Position.x = stage_output.gl_Position.x - gl_HalfPixel.x * "
-				          "stage_output.gl_Position.w;");
-				statement("stage_output.gl_Position.y = stage_output.gl_Position.y + gl_HalfPixel.y * "
-				          "stage_output.gl_Position.w;");
-			}
-			if (options.flip_vert_y)
-			{
-				statement("stage_output.gl_Position.y = -stage_output.gl_Position.y;");
-			}
-			if (options.fixup_clipspace)
-			{
-				statement(
-				    "stage_output.gl_Position.z = (stage_output.gl_Position.z + stage_output.gl_Position.w) * 0.5;");
-			}
-		}
-
 		statement("return stage_output;");
 	}
 
 	end_scope();
+}
+
+void CompilerHLSL::emit_fixup()
+{
+	// Do various mangling on the gl_Position.
+	if (options.shader_model <= 30)
+	{
+		statement("gl_Position.x = gl_Position.x - gl_HalfPixel.x * "
+		          "gl_Position.w;");
+		statement("gl_Position.y = gl_Position.y + gl_HalfPixel.y * "
+		          "gl_Position.w;");
+	}
+
+	if (CompilerGLSL::options.vertex.flip_vert_y)
+		statement("gl_Position.y = -gl_Position.y;");
+	if (CompilerGLSL::options.vertex.fixup_clipspace)
+		statement("gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;");
 }
 
 void CompilerHLSL::emit_texture_op(const Instruction &i)
@@ -1502,7 +1587,8 @@ void CompilerHLSL::emit_texture_op(const Instruction &i)
 	if (op == OpImageFetch)
 	{
 		auto &coordtype = expression_type(coord);
-		coord_expr = join("int", coordtype.vecsize + 1, "(", coord_expr, ", ", to_expression(lod), ")");
+		if (imgtype.image.dim != DimBuffer)
+			coord_expr = join("int", coordtype.vecsize + 1, "(", coord_expr, ", ", to_expression(lod), ")");
 	}
 
 	if (op != OpImageFetch)
@@ -1648,7 +1734,7 @@ void CompilerHLSL::emit_modern_uniform(const SPIRVariable &var)
 	{
 		statement(image_type_hlsl_modern(type), " ", to_name(var.self), to_resource_binding(var), ";");
 
-		if (type.basetype == SPIRType::SampledImage)
+		if (type.basetype == SPIRType::SampledImage && type.image.dim != DimBuffer)
 		{
 			// For combined image samplers, also emit a combined image sampler.
 			if (type.image.depth)
@@ -1770,6 +1856,198 @@ void CompilerHLSL::emit_glsl_op(uint32_t result_type, uint32_t id, uint32_t eop,
 	}
 }
 
+string CompilerHLSL::read_access_chain(const SPIRAccessChain &chain)
+{
+	auto &type = get<SPIRType>(chain.basetype);
+
+	SPIRType target_type;
+	target_type.basetype = SPIRType::UInt;
+	target_type.vecsize = type.vecsize;
+	target_type.columns = type.columns;
+
+	// FIXME: Transposition?
+	if (type.columns != 1)
+		SPIRV_CROSS_THROW("Reading matrices from ByteAddressBuffer not yet supported.");
+
+	if (type.basetype == SPIRType::Struct)
+		SPIRV_CROSS_THROW("Reading structs from ByteAddressBuffer not yet supported.");
+
+	if (type.width != 32)
+		SPIRV_CROSS_THROW("Reading types other than 32-bit from ByteAddressBuffer not yet supported.");
+
+	const char *load_op = nullptr;
+	switch (type.vecsize)
+	{
+	case 1:
+		load_op = "Load";
+		break;
+	case 2:
+		load_op = "Load2";
+		break;
+	case 3:
+		load_op = "Load3";
+		break;
+	case 4:
+		load_op = "Load4";
+		break;
+	default:
+		SPIRV_CROSS_THROW("Unknown vector size.");
+	}
+
+	auto load_expr = join(chain.base, ".", load_op, "(", chain.dynamic_index, chain.static_index, ")");
+	auto bitcast_op = bitcast_glsl_op(type, target_type);
+	if (!bitcast_op.empty())
+		load_expr = join(bitcast_op, "(", load_expr, ")");
+
+	return load_expr;
+}
+
+void CompilerHLSL::emit_load(const Instruction &instruction)
+{
+	auto ops = stream(instruction);
+
+	auto *chain = maybe_get<SPIRAccessChain>(ops[2]);
+	if (chain)
+	{
+		uint32_t result_type = ops[0];
+		uint32_t id = ops[1];
+		uint32_t ptr = ops[2];
+
+		auto load_expr = read_access_chain(*chain);
+
+		bool forward = should_forward(ptr) && forced_temporaries.find(id) == end(forced_temporaries);
+		auto &e = emit_op(result_type, id, load_expr, forward, true);
+		e.need_transpose = false; // TODO: Forward this somehow.
+		register_read(id, ptr, forward);
+	}
+	else
+		CompilerGLSL::emit_instruction(instruction);
+}
+
+void CompilerHLSL::emit_store(const Instruction &instruction)
+{
+	auto ops = stream(instruction);
+	auto *chain = maybe_get<SPIRAccessChain>(ops[0]);
+	if (chain)
+	{
+		auto &type = expression_type(ops[0]);
+
+		SPIRType target_type;
+		target_type.basetype = SPIRType::UInt;
+		target_type.vecsize = type.vecsize;
+		target_type.columns = type.columns;
+
+		const char *store_op = nullptr;
+		switch (type.vecsize)
+		{
+		case 1:
+			store_op = "Store";
+			break;
+		case 2:
+			store_op = "Store2";
+			break;
+		case 3:
+			store_op = "Store3";
+			break;
+		case 4:
+			store_op = "Store4";
+			break;
+		default:
+			SPIRV_CROSS_THROW("Unknown vector size.");
+		}
+
+		if (type.columns != 1)
+			SPIRV_CROSS_THROW("Writing matrices to RWByteAddressBuffer not yet supported.");
+		if (type.basetype == SPIRType::Struct)
+			SPIRV_CROSS_THROW("Writing structs to RWByteAddressBuffer not yet supported.");
+		if (type.width != 32)
+			SPIRV_CROSS_THROW("Writing types other than 32-bit to RWByteAddressBuffer not yet supported.");
+
+		auto store_expr = to_expression(ops[1]);
+		auto bitcast_op = bitcast_glsl_op(target_type, type);
+		if (!bitcast_op.empty())
+			store_expr = join(bitcast_op, "(", store_expr, ")");
+		statement(chain->base, ".", store_op, "(", chain->dynamic_index, chain->static_index, ", ", store_expr, ");");
+		register_write(ops[0]);
+	}
+	else
+		CompilerGLSL::emit_instruction(instruction);
+}
+
+void CompilerHLSL::emit_access_chain(const Instruction &instruction)
+{
+	auto ops = stream(instruction);
+	uint32_t length = instruction.length;
+
+	bool need_byte_access_chain = false;
+	auto &type = expression_type(ops[2]);
+	const SPIRAccessChain *chain = nullptr;
+	if (has_decoration(type.self, DecorationBufferBlock))
+	{
+		// If we are starting to poke into an SSBO, we are dealing with ByteAddressBuffers, and we need
+		// to emit SPIRAccessChain rather than a plain SPIRExpression.
+		uint32_t chain_arguments = length - 3;
+		if (chain_arguments > type.array.size())
+			need_byte_access_chain = true;
+	}
+	else
+	{
+		// Keep tacking on an existing access chain.
+		chain = maybe_get<SPIRAccessChain>(ops[2]);
+		if (chain)
+			need_byte_access_chain = true;
+	}
+
+	if (need_byte_access_chain)
+	{
+		uint32_t to_plain_buffer_length = type.array.size();
+
+		string base;
+		if (to_plain_buffer_length != 0)
+		{
+			bool need_transpose;
+			base = access_chain(ops[2], &ops[3], to_plain_buffer_length, get<SPIRType>(ops[0]), &need_transpose);
+		}
+		else
+			base = to_expression(ops[2]);
+
+		auto *basetype = &type;
+
+		// Start traversing type hierarchy at the proper non-pointer types.
+		while (basetype->pointer)
+		{
+			assert(basetype->parent_type);
+			basetype = &get<SPIRType>(basetype->parent_type);
+		}
+
+		// Traverse the type hierarchy down to the actual buffer types.
+		for (uint32_t i = 0; i < to_plain_buffer_length; i++)
+		{
+			assert(basetype->parent_type);
+			basetype = &get<SPIRType>(basetype->parent_type);
+		}
+
+		uint32_t matrix_stride = 0;
+		bool need_transpose = false;
+		auto offsets =
+		    flattened_access_chain_offset(*basetype, &ops[3 + to_plain_buffer_length],
+		                                  length - 3 - to_plain_buffer_length, 0, 1, &need_transpose, &matrix_stride);
+
+		auto &e = set<SPIRAccessChain>(ops[1], ops[0], type.storage, base, offsets.first, offsets.second);
+		if (chain)
+		{
+			e.dynamic_index += chain->dynamic_index;
+			e.static_index += chain->static_index;
+		}
+
+		e.immutable = should_forward(ops[2]);
+	}
+	else
+	{
+		CompilerGLSL::emit_instruction(instruction);
+	}
+}
+
 void CompilerHLSL::emit_instruction(const Instruction &instruction)
 {
 	auto ops = stream(instruction);
@@ -1789,6 +2067,25 @@ void CompilerHLSL::emit_instruction(const Instruction &instruction)
 
 	switch (opcode)
 	{
+	case OpAccessChain:
+	case OpInBoundsAccessChain:
+	{
+		emit_access_chain(instruction);
+		break;
+	}
+
+	case OpStore:
+	{
+		emit_store(instruction);
+		break;
+	}
+
+	case OpLoad:
+	{
+		emit_load(instruction);
+		break;
+	}
+
 	case OpMatrixTimesVector:
 	{
 		emit_binary_func_op(ops[0], ops[1], ops[3], ops[2], "mul");

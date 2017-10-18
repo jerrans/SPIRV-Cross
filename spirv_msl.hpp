@@ -76,7 +76,6 @@ public:
 	// Options for compiling to Metal Shading Language
 	struct Options
 	{
-		bool flip_vert_y = false;
 		bool enable_point_size_builtin = true;
 		std::string entry_point_name;
 	};
@@ -151,7 +150,7 @@ protected:
 	                        const std::string &qualifier = "") override;
 	std::string type_to_glsl(const SPIRType &type, uint32_t id = 0) override;
 	std::string image_type_glsl(const SPIRType &type, uint32_t id = 0) override;
-	std::string builtin_to_glsl(spv::BuiltIn builtin) override;
+	std::string builtin_to_glsl(spv::BuiltIn builtin, spv::StorageClass storage) override;
 	std::string constant_expression(const SPIRConstant &c) override;
 	size_t get_declared_struct_member_size(const SPIRType &struct_type, uint32_t index) const override;
 	std::string to_func_call_arg(uint32_t id) override;
@@ -184,6 +183,7 @@ protected:
 	void emit_interface_block(uint32_t ib_var_id);
 	void populate_func_name_overrides();
 	void populate_var_name_overrides();
+	bool maybe_emit_input_struct_assignment(uint32_t id_lhs, uint32_t id_rhs);
 
 	std::string func_type_decl(SPIRType &type);
 	std::string clean_func_name(std::string func_name) override;
@@ -202,8 +202,9 @@ protected:
 	uint32_t get_ordered_member_location(uint32_t type_id, uint32_t index);
 	size_t get_declared_struct_member_alignment(const SPIRType &struct_type, uint32_t index) const;
 	std::string to_component_argument(uint32_t id);
-	void exclude_from_stage_in(SPIRVariable &var);
-	void exclude_member_from_stage_in(const SPIRType &type, uint32_t index);
+	bool should_move_to_input_buffer(SPIRType &type, bool is_builtin, spv::StorageClass storage);
+	void move_to_input_buffer(SPIRVariable &var);
+	void move_member_to_input_buffer(const SPIRType &type, uint32_t index);
 	std::string add_input_buffer_block_member(uint32_t mbr_type_id, std::string mbr_name, uint32_t mbr_locn);
 	uint32_t get_input_buffer_block_var_id(uint32_t msl_buffer);
 	void align_struct(SPIRType &ib_type);
