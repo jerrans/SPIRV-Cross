@@ -35,9 +35,6 @@
 #include <algorithm>
 #include <iomanip> // std::put_time
 
-#define PACKED ""
-//#define PACKED "_packed"
-
 using namespace spv;
 using namespace spirv_cross;
 using namespace std;
@@ -60,9 +57,6 @@ void CompilerISPC::emit_buffer_block(const SPIRVariable &var)
 	resource_registrations.push_back(
 	    join("s.register_resource(", instance_name, "__", ", ", descriptor_set, ", ", binding, ");"));
 */
-    resource_registrations.push_back(join("uniform struct ", buffer_name, type_to_array_glsl(type), " ", instance_name, ";"));
-    resource_entry_arguments.push_back(join("uniform struct ", buffer_name, type_to_array_glsl(type), "& ", instance_name));
-    resource_entry_arguments_init.push_back(join(instance_name));
 
 	statement("");
 }
@@ -90,7 +84,6 @@ void CompilerISPC::emit_interface_block(const SPIRVariable &var)
 
 	statement("internal::", qual, "<", buffer_name, type_to_array_glsl(type), "> ", instance_name, "__;");
 	statement_no_indent("#define ", instance_name, " __res->", instance_name, "__.get()");
-	resource_registrations.push_back(join("s.register_", lowerqual, "(", instance_name, "__", ", ", location, ");"));
 	statement("");
 }
 
@@ -121,15 +114,11 @@ void CompilerISPC::emit_uniform(const SPIRVariable &var)
 	{
 		statement("internal::Resource<", type_name, type_to_array_glsl(type), "> ", instance_name, "__;");
 //		statement_no_indent("#define ", instance_name, " __res->", instance_name, "__.get()");
-//		resource_registrations.push_back(
 //		    join("s.register_resource(", instance_name, "__", ", ", descriptor_set, ", ", binding, ");"));
 	}
 	else
 	{
-		statement("//unsupported internal::UniformConstant<", type_name, type_to_array_glsl(type), "> ", instance_name, "__;");
-//		statement_no_indent("#define ", instance_name, " __res->", instance_name, "__.get()");
-//		resource_registrations.push_back(
-//		    join("s.register_uniform_constant(", instance_name, "__", ", ", location, ");"));
+//        statement("uniform ", type_name, " ", instance_name, type_to_array_glsl(type), ";");
 	}
 
 	statement("");
@@ -151,7 +140,6 @@ void CompilerISPC::emit_push_constant_block(const SPIRVariable &var)
 
 	statement("internal::PushConstant<", buffer_name, type_to_array_glsl(type), "> ", instance_name, ";");
 	statement_no_indent("#define ", instance_name, " __res->", instance_name, ".get()");
-	resource_registrations.push_back(join("s.register_push_constant(", instance_name, "__", ");"));
 	statement("");
 }
 
@@ -172,142 +160,6 @@ void CompilerISPC::emit_resources()
     auto &execution = get_entry_point();
 
     vector<string> varyings = { "varying", "uniform" };
-
-    if (requires_op_dot)
-    {
-        statement("");
-        statement("//////////////////////////////");
-        statement("// Dot Product");
-        statement("//////////////////////////////");
-        vector<vector<string>> varying_tuples = {
-            { "varying", "varying", "varying" },
-            { "varying", "varying", "uniform" },
-            { "varying", "uniform", "varying" },
-            { "uniform", "uniform", "uniform" },
-        };
-        for (auto &v : varying_tuples)
-        {
-            statement("inline ", v[0], " float dot(", v[1], " float4& lhs, ", v[2], " float4& rhs)");
-            begin_scope();
-            statement("return lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z + lhs.w * rhs.w;");
-            end_scope();
-            statement("");
-            statement("inline ", v[0], " float dot(", v[1], " float3& lhs, ", v[2], " float3& rhs)");
-            begin_scope();
-            statement("return lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z;");
-            end_scope();
-            statement("");
-            statement("inline ", v[0], " float dot(", v[1], " float2& lhs, ", v[2], " float2& rhs)");
-            begin_scope();
-            statement("return lhs.x * rhs.x + lhs.y * rhs.y;");
-            end_scope();
-            statement("");
-        }
-    }
-
-    if (requires_op_len)
-    {
-        statement("");
-        statement("//////////////////////////////");
-        statement("// Length");
-        statement("//////////////////////////////");
-        for (auto &v : varyings)
-        {
-            statement("inline ", v, " float length(", v, " float3& rhs)");
-            begin_scope();
-            statement("return sqrt(dot(rhs, rhs));");
-            end_scope();
-            statement("");
-        }
-    }
-
-    if (requires_op_reflect)
-    {
-        statement("");
-        statement("//////////////////////////////");
-        statement("// Reflect");
-        statement("//////////////////////////////");
-        vector<int> width = { 2, 3, 4 };
-        vector<vector<string>> varying_tuples = {
-            { "varying", "varying", "varying" },
-            { "varying", "varying", "uniform" },
-            { "varying", "uniform", "varying" },
-            { "uniform", "uniform", "uniform" },
-        };
-
-        // v = i - 2 * n * dot(i•n)
-        for (auto &v : varying_tuples)
-        {
-            for (auto &w : width)
-            {
-                statement("inline ", v[0], " float", w, " reflect(", v[1], " float", w, "& i, ", v[2], " float", w, "& n)");
-                begin_scope();
-                statement("return i - n * float", w, "_init(dot(i, n) * 2.0f);");
-                end_scope();
-                statement("");
-            }
-        }
-    }
-
-    if (requires_op_mix)
-    {
-        //x + s(y-x)
-        statement("");
-        statement("//////////////////////////////");
-        statement("// Mix");
-        statement("//////////////////////////////");
-        vector<int> width = { 1, 2, 3, 4 };
-        for (auto &v : varyings)
-        {
-            for (auto &w : width)
-            {
-                if (w == 1)
-                    statement("inline ", v, " float mix(", v, " float& x, ", v, " float& y, ", v, " float& s)");
-                else
-                    statement("inline ", v, " float", w, " mix(", v, " float", w, "& x, ", v, " float", w, "& y, ", v, " float", w, "& s)");
-                begin_scope();
-                statement("return x + s * (y - x);");
-                end_scope();
-                statement("");
-            }
-        }
-    }
-
-    if (requires_op_atomics)
-    {
-        statement("");
-        statement("//////////////////////////////");
-        statement("// Atomics");
-        statement("//////////////////////////////");
-        vector<string> op = { "atomic_add", "atomic_subtract", "atomic_min", "atomic_max", "atomic_and", "atomic_or", "atomic_xor" };
-        for (auto &o : op)
-        {
-            statement("inline varying int ", o, "(uniform int * uniform ptr, varying int value)");
-            begin_scope();
-            statement("uniform int ret[programCount];");
-            statement("foreach_active(instance)");
-            begin_scope();
-            statement("uniform int val = extract(value, instance);");
-            statement("ret[instance] = ", o, "_global(ptr, val);");
-            end_scope();
-            statement("varying int vRet = *((varying int * uniform) &ret);");
-            statement("return vRet;");
-            end_scope();
-            statement("");
-
-            statement("inline varying int ", o, "(uniform int * uniform ptr, uniform int value)");
-            begin_scope();
-            statement("uniform int ret[programCount];");
-            statement("foreach_active(instance)");
-            begin_scope();
-            statement("ret[instance] = ", o, "_global(ptr, value);");
-            end_scope();
-            statement("varying int vRet = *((varying int * uniform) &ret);");
-            statement("return vRet;");
-            end_scope();
-            statement("");
-        }
-    }
 
     // Output all basic struct types which are not Block or BufferBlock as these are declared inplace
 	// when such variables are instantiated.
@@ -390,7 +242,7 @@ void CompilerISPC::emit_resources()
 			auto &type = get<SPIRType>(var.basetype);
 
 			if (var.storage != StorageClassFunction && !is_hidden_variable(var) && type.pointer &&
-			    (type.storage == StorageClassUniformConstant || type.storage == StorageClassAtomicCounter))
+			    (type.storage == StorageClassUniformConstant || type.storage == StorageClassAtomicCounter))// || type.storage == StorageClassPrivate))
 			{
 				emit_uniform(var);
 			}
@@ -466,6 +318,7 @@ string CompilerISPC::compile()
 	backend.flexible_member_array_supported = false;
 	backend.explicit_struct_type = true;
 	backend.use_initializer_list = true;
+    backend.stdlib_filename = "spirvcross_stdlib.ispc";
 
 	update_active_builtins();
 
@@ -477,15 +330,16 @@ string CompilerISPC::compile()
         if (pass_count >= 3)
 			SPIRV_CROSS_THROW("Over 3 compilation loops detected. Must be a bug!");
 
-        resource_registrations.clear();
-        resource_entry_arguments.clear();
-        resource_entry_arguments_init.clear();
         reset();
 
 		// Move constructor for this type is broken on GCC 4.9 ...
-		buffer = unique_ptr<ostringstream>(new ostringstream());
+		// Write to the stdlib buffer, then swap the buffer pointers over.
+        buffer = unique_ptr<ostringstream>(new ostringstream());
+        emit_stdlib();
+        stdlib_buffer = std::move(buffer);
 
-		emit_header();
+        buffer = unique_ptr<ostringstream>(new ostringstream());
+        emit_header();
 		emit_resources();
 
 		emit_function(get<SPIRFunction>(entry_point), 0);
@@ -558,16 +412,13 @@ void CompilerISPC::emit_ispc_main()
     statement("//////////////////////////////");
 
     // Dispatch all
-    if (resource_entry_arguments.empty())
-        statement("export void ", entry_point_name, "_dispatch_all(uniform int wg[3])");
-    else
-    {
-        string decl = "export void " + entry_point_name + "_dispatch_all(uniform int wg[3], ";
-        decl += entry_point_args(!get<SPIRFunction>(entry_point).arguments.empty(), false);
-        decl += ")";
+    string decl = "export void " + entry_point_name + "_dispatch_all(uniform int wg[3]";
+    string args = entry_point_args(!get<SPIRFunction>(entry_point).arguments.empty(), false);
+    if (!args.empty())
+        decl = join(decl, ", ", args);
+    decl += ")";
+    statement(decl);
 
-        statement(decl);
-    }
     {
         begin_scope();
 
@@ -595,27 +446,10 @@ void CompilerISPC::emit_ispc_main()
                         statement("varying int gl_LocalInvocationIndex = gl_LocalInvocationID.z * gl_WorkGroupSize.x * gl_WorkGroupSize.y + gl_LocalInvocationID.y * gl_WorkGroupSize.x + gl_LocalInvocationID.x;");
                         statement("");
 
-                        if (resource_entry_arguments.empty())
-                            statement("ispc_main();");
-                        else
-                        {
-                            string decl = "ispc_main(";
-                            decl += entry_point_args_init(!get<SPIRFunction>(entry_point).arguments.empty(), true);
-                            decl += ");";
-                            statement(decl);
-/*
-                            string args;
-                            for (uint32_t ii = 0; ii < resource_entry_arguments_init.size(); ii++)
-                            {
-                                args += resource_entry_arguments_init[ii];
-                                if ((ii + 1) < resource_entry_arguments_init.size())
-                                    args += ", ";
-                            }
-                            statement("main(", args, ");");
-*/
-                        }
-
-
+                        string decl = "ispc_main(";
+                        decl += entry_point_args_init(!get<SPIRFunction>(entry_point).arguments.empty(), true);
+                        decl += ");";
+                        statement(decl);
                         end_scope();
                     }
                     end_scope();
@@ -629,14 +463,12 @@ void CompilerISPC::emit_ispc_main()
     statement("");
 
     // Dispatch single
-    if (resource_entry_arguments.empty())
-        statement("export void ", "export void ", entry_point_name, "_dispatch_single(uniform int wg[3])");
-    else
     {
-        string decl = "export void " + entry_point_name + "_dispatch_single(uniform int wg[3], ";
-        decl += entry_point_args(!get<SPIRFunction>(entry_point).arguments.empty(), false);
+        string decl = "export void " + entry_point_name + "_dispatch_single(uniform int wg[3]";
+        string args = entry_point_args(!get<SPIRFunction>(entry_point).arguments.empty(), false);
+        if (!args.empty())
+            decl = join(decl, ", ", args);
         decl += ")";
-
         statement(decl);
     }
     {
@@ -655,15 +487,11 @@ void CompilerISPC::emit_ispc_main()
             statement("varying int gl_LocalInvocationIndex = gl_LocalInvocationID.z * gl_WorkGroupSize.x * gl_WorkGroupSize.y + gl_LocalInvocationID.y * gl_WorkGroupSize.x + gl_LocalInvocationID.x;");
             statement("");
 
-            if (resource_entry_arguments.empty())
-                statement("ispc_main();");
-            else
-            {
-                string decl = "ispc_main(";
-                decl += entry_point_args_init(!get<SPIRFunction>(entry_point).arguments.empty(), true);
-                decl += ");";
-                statement(decl);
-            }
+            string decl = "ispc_main(";
+            decl += entry_point_args_init(!get<SPIRFunction>(entry_point).arguments.empty(), true);
+            decl += ");";
+            statement(decl);
+
             end_scope();
         }
         end_scope();
@@ -738,12 +566,15 @@ string CompilerISPC::argument_decl(const SPIRFunction::Parameter &arg)
 	remap_variable_type_name(type, variable_name, base);
 
 	for (uint32_t i = 0; i < type.array.size(); i++)
-		base = join("a std::array<", base, ", ", to_array_size(type, i), ">");
+        variable_name = join(variable_name, "[", to_array_size(type, i), "]");
+    
+    // arrays get confused if passed by reference
+    string passByRef = type.array.size() ? " " : "& ";
 
 	return join(
         varyings[arg.id] ? "varying " : "uniform ", 
         constref ? "const " : "", 
-        base, " &", variable_name);
+        base, passByRef, variable_name);
 }
 
 string CompilerISPC::variable_decl(const SPIRType &type, const string &name, uint32_t id)
@@ -785,166 +616,6 @@ string CompilerISPC::variable_decl(const SPIRType &type, const string &name, uin
 	return base + name + (runtime ? "[]" : arrayString);
 }
 
-void CompilerISPC::create_default_constructor(std::string type, bool varying, uint32_t width, uint32_t arg_count, uint32_t arg_width[4])
-{
-    std::vector<string> arg_names = { "a", "b", "c", "d" };
-    std::vector<string> arg_swizzles = { ".x", ".y", ".z", ".w" };
-
-    std::vector<string> vector_names = { "varying ", "uniform " };
-    std::string v = vector_names[varying ? 0 : 1];
-
-    uint32_t function_count = 1;
-    if (varying && arg_count > 1)
-        function_count = 2;
-
-    // For varying functions, create 2 variants
-    // 1 - func (varying, varying)
-    // 2 - func (varying, uniform)
-    // Could do more, but that will suffice for now
-    for (uint32_t ii = 0; ii < function_count; ii++)
-    {
-        // Create signature
-        string args = "";
-        for (uint32_t ac = 0; ac < arg_count; ac++)
-        {
-            if ((ac == arg_count - 1) && (function_count > 1))
-                args += vector_names[ii];
-            else
-                args += v;
-
-            args += join("const ", type);   // varying const float
-            if (arg_width[ac] > 1)
-                args += join(arg_width[ac]);        // varying const float2
-            args += "&";                            // varying const float2&
-            args += join(" ", arg_names[ac]);       // varying const float2& a
-            if ((ac + 1) < arg_count)
-                args += ", ";
-        }
-
-        statement("inline ", v, type, width, " ", type, width, "_init(", args, " )");
-        begin_scope();
-
-        // Create list initialiser
-        string init;
-        uint32_t required_initialisers = 0;
-        while (required_initialisers < width)
-        {
-            for (uint32_t ac = 0; ac < arg_count; ac++)
-            {
-                for (uint32_t aw = 0; aw < arg_width[ac]; aw++)
-                {
-                    required_initialisers++;
-
-                    init += arg_names[ac];
-                    if (arg_width[ac] > 1)
-                        init += arg_swizzles[aw];
-                    if (required_initialisers < width)
-                        init += ", ";
-                }
-            }
-        }
-
-        statement(v, type, width, " ret = { ", init, " }; ");
-        statement("return ret;");
-        end_scope();
-        statement("");
-    }
-}
-
-void CompilerISPC::create_default_binary_op(std::string type, uint32_t width, std::string op)
-{
-    vector<string> varying = { "uniform ", "varying " };
-    vector<string> arg_swizzles = { ".x", ".y", ".z", ".w" };
-
-    for (auto& arg1 : varying)
-    {
-        for (auto& arg2 : varying)
-        {
-            auto& ret_varying = (arg1 != arg2) ? varying[1] : arg1;
-            // scalar
-            statement("inline ", ret_varying, type, width, " operator", op, "(", arg1, type, width, " a, ", arg2, type, " b)");
-            begin_scope();
-            statement(ret_varying, type, width, " ret;");
-            for (uint32_t ii = 0; ii < width; ii++)
-            {
-                statement("ret", arg_swizzles[ii], " = a", arg_swizzles[ii], " ", op, " b;");
-            }
-            statement("return ret;");
-            end_scope();
-            statement("");
-
-            // vector
-            statement("inline ", ret_varying, type, width, " operator", op, "(", arg1, type, width, " a, ", arg2, type, width, " b)");
-            begin_scope();
-            statement(ret_varying, type, width, " ret;");
-            for (uint32_t ii = 0; ii < width; ii++)
-            {
-                statement("ret", arg_swizzles[ii], " = a", arg_swizzles[ii], " ", op, " b", arg_swizzles[ii], ";");
-            }
-            statement("return ret;");
-            end_scope();
-            statement("");
-        }
-    }
-}
-
-void CompilerISPC::create_default_load_op(std::string type, uint32_t width)
-{
-    vector<string> varying = { "uniform ", "varying " };
-    vector<string> arg_swizzles = { ".x", ".y", ".z", ".w" };
-
-    for (auto& v : varying)
-    {
-        statement("inline ", v , type, width, " load", width, "(", v, type, width, PACKED, " a)");
-        begin_scope();
-        string args;
-        for (uint32_t ii = 0; ii < width; ii++)
-        {
-            args += join("a", arg_swizzles[ii]);
-            if ((ii + 1) < width)
-                args += ", ";
-        }
-        statement("return ", type, width, "_init(", args, ");");
-        end_scope();
-        statement("");
-    }
-}
-
-void CompilerISPC::create_default_store_op(std::string type, uint32_t width)
-{
-    vector<string> varying = { "uniform ", "varying " };
-    vector<string> arg_swizzles = { ".x", ".y", ".z", ".w" };
-    for (auto& v : varying)
-    {
-        statement("inline ", v, type, width, PACKED, " store", width, "(", v, type, width, " a)");
-        begin_scope();
-        statement(v, type, width, PACKED, " ret;");
-
-        string args;
-        for (uint32_t ii = 0; ii < width; ii++)
-        {
-            statement("ret", arg_swizzles[ii], " = a", arg_swizzles[ii], ";");
-        }
-        statement("return ret;");
-        end_scope();
-        statement("");
-    }
-}
-
-void CompilerISPC::create_default_structs(std::string type, uint32_t width)
-{
-    std::vector<string> arg_swizzles = { "x", "y", "z", "w" };
-    statement("struct ", type, width, PACKED);
-    begin_scope();
-    string args;
-    for (uint32_t ii = 0; ii < width; ii++)
-    {
-        statement(type, " ", arg_swizzles[ii], ";");
-    }
-    end_scope_decl();
-    statement("");
-}
-
 void CompilerISPC::emit_header()
 {
     auto &execution = get_entry_point();
@@ -960,6 +631,7 @@ void CompilerISPC::emit_header()
     statement("//////////////////////////////");
     statement("//");
     statement("");
+    statement("#include \"", backend.stdlib_filename, "\"");
 
     statement("");
     statement("//////////////////////////////");
@@ -969,78 +641,6 @@ void CompilerISPC::emit_header()
     statement("");
 
 
-    statement("");
-    statement("//////////////////////////////");
-    statement("// Default Types");
-    statement("//////////////////////////////");
-    statement("typedef float mat3[3][3];");
-    statement("typedef float mat4[4][4];");
-
-    std::vector<uint32_t> widths = { 2, 3, 4 };
-    std::vector<string> types = { "float", "int" };
-    for (const string& t : types)
-    {
-        create_default_structs(t, 1);
-        for (const uint32_t& w : widths)
-        {
-            create_default_structs(t, w);
-        }
-    }
-
-    std::vector<bool> varying = { true, false }; 
-#if 1
-    statement("");
-    statement("//////////////////////////////");
-    statement("// Default Constructors");
-    statement("//////////////////////////////");
-    for (const string& t : types)
-    {
-        for (const bool& v : varying)
-        {
-            for (const uint32_t& w : widths)
-            {
-                 uint32_t arg_widths[][4] = {
-                    { 1, 1, 1, 1 }, // all
-                    { 2, 1, 1, 1 }, // float 3 and larger
-                    { 3, 1, 1, 1 }, // float 4 and larger
-
-                };
-
-                create_default_constructor(t, v, w, 1, arg_widths[0]);
-                create_default_constructor(t, v, w, w, arg_widths[0]);
-
-                if (w > 2)
-                {
-                    create_default_constructor(t, v, w, w - 1, arg_widths[1]);
-                }
-                if (w > 3)
-                {
-                    create_default_constructor(t, v, w, w - 2, arg_widths[2]);
-                }
-            }
-        }
-    }
-#endif
-    statement("");
-    statement("//////////////////////////////");
-    statement("// Default Operators");
-    statement("//////////////////////////////");
-    std::vector<uint32_t> load_widths = { 2, 3, 4 };
-    std::vector<string> load_types = { "float", "int" };
-//    std::vector<string> binary_ops = { "*", "/", "%", "+", "-" };
-    std::vector<string> binary_ops = { "*", "/", "+", "-" };
-    for (const string& t : load_types)
-    {
-        for (const uint32_t& w : load_widths)
-        {
-//            create_default_load_op(t, w);
-//            create_default_store_op(t, w);
-            for (const string& bop : binary_ops)
-            {
-                create_default_binary_op(t, w, bop);
-            }
-        }
-    }
 
 
 //	statement("#include \"spirv_cross/internal_interface.hpp\"");
@@ -1174,19 +774,19 @@ string CompilerISPC::type_to_glsl(const SPIRType &type, uint32_t id)
             switch (type.basetype)
             {
             case SPIRType::Boolean:
-                return join("bool", type.vecsize, PACKED);
+                return join("bool", type.vecsize);
             case SPIRType::Int:
-                return join("int", type.vecsize, PACKED);
+                return join("int", type.vecsize);
             case SPIRType::UInt:
-                return join("int", type.vecsize, PACKED);
+                return join("int", type.vecsize);
             case SPIRType::Float:
-                return join("float", type.vecsize, PACKED);
+                return join("float", type.vecsize);
             case SPIRType::Double:
-                return join("double", type.vecsize, PACKED);
+                return join("double", type.vecsize);
             case SPIRType::Int64:
-                return join("int64", type.vecsize, PACKED);
+                return join("int64", type.vecsize);
             case SPIRType::UInt64:
-                return join("int64", type.vecsize, PACKED);
+                return join("int64", type.vecsize);
             default:
                 return "???";
             }
@@ -1296,11 +896,6 @@ void CompilerISPC::emit_instruction(const Instruction &instruction)
 */
     case OpDot:
     {
-        if (!requires_op_dot)
-        {
-            requires_op_dot = true;
-            force_recompile = true;
-        }
         CompilerGLSL::emit_instruction(instruction);
         break;
     }
@@ -1405,12 +1000,6 @@ void CompilerISPC::emit_instruction(const Instruction &instruction)
             SPIRV_CROSS_THROW("Atomic images not supported for ISPC.");
         }
 
-        if (!requires_op_atomics)
-        {
-            requires_op_atomics = true;
-            force_recompile = true;
-        }
-
         string func;
         switch (opcode)
         {
@@ -1477,31 +1066,22 @@ void CompilerISPC::emit_glsl_op(uint32_t result_type, uint32_t id, uint32_t eop,
         // Vector math
     case GLSLstd450Length:
         emit_unary_func_op(result_type, id, args[0], "length");
-        if (!requires_op_len)
-        {
-            requires_op_len = true;
-            requires_op_dot = true;
-            force_recompile = true;
-        }
         break;
 
     case GLSLstd450Reflect:
         emit_binary_func_op(result_type, id, args[0], args[1], "reflect");
-        if (!requires_op_reflect)
-        {
-            requires_op_reflect = true;
-            requires_op_dot = true;
-            force_recompile = true;
-        }
         break;
 
     case GLSLstd450FMix:
         emit_trinary_func_op(result_type, id, args[0], args[1], args[2], "mix");
-        if (!requires_op_mix)
-        {
-            requires_op_mix = true;
-            force_recompile = true;
-        }
+        break;
+
+    case GLSLstd450RoundEven:
+        emit_unary_func_op(result_type, id, args[0], "round");
+        break;
+
+    case GLSLstd450InverseSqrt:
+        emit_unary_func_op(result_type, id, args[0], "rsqrt");
         break;
 
     default:
@@ -1511,9 +1091,10 @@ void CompilerISPC::emit_glsl_op(uint32_t result_type, uint32_t id, uint32_t eop,
 
 bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *args, uint32_t length)
 {
-    auto add_dependancies = [&](const uint32_t arg1, const uint32_t arg2)
+    // dst = src; dst is dependant upon src, so [src] = dst
+    auto add_dependancies = [&](const uint32_t dst, const uint32_t src)
     {
-        dependee_hierarchy[arg2].insert(arg1);
+        dependee_hierarchy[src].insert(dst);
     };
 
     switch (opcode)
@@ -1524,8 +1105,8 @@ bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *
         if (length < 3)
             return false;
 
-        // The access chain is name, type arg pairs. Need to add all dependancies
-        for (uint32_t i = 2; i < length; i += 2)
+        // The access chain is name, type, arg indices. Need to add all dependancies
+        for (uint32_t i = 2; i < length; i++)
         {
             add_dependancies(args[1], args[i]);
 
@@ -1542,15 +1123,7 @@ bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *
 
         break;
     }
-    case OpCompositeExtract:
-    case OpLoad:
-    {
-        if (length < 3)
-            return false;
 
-        add_dependancies(args[1], args[2]);
-        break;
-    }
     case OpStore:
     {
         if (length < 2)
@@ -1578,54 +1151,27 @@ bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *
             add_dependancies(argument.id, arg[i]);
             add_dependancies(arg[i], argument.id);
         }
-        break;
-    }
 
-    case OpSNegate:
-    case OpFNegate:
-    case OpIAdd:
-    case OpFAdd:
-    case OpISub:
-    case OpFSub:
-    case OpIMul:
-    case OpFMul:
-    case OpUDiv:
-    case OpSDiv:
-    case OpFDiv:
-    case OpVectorTimesScalar:
-    case OpDot:
-    case OpConvertSToF:
-    case OpCompositeConstruct:
-    {
-        if (length < 3)
-            return false;
+        // Need to add a dependancy on the function return variable and the return of the last block in the function
+        // This ensures that any variables returned and stored have their varying status correctly propogated
+        // args[0] stores the return type
+        // args[1] stores the return id
 
-        for (uint32_t i = 2; i < length; i++)
+        // walk all blocks looking for return types and propogate to the function
+        for (auto& b : func.blocks)
         {
-            add_dependancies(args[1], args[i]);
+            auto block = compiler.get<SPIRBlock>(b);
+
+            // OpReturnValue can return Undef, so don't add a dependancy for this
+            if (compiler.ids.at(block.return_value).get_type() != TypeUndef)
+            {
+                add_dependancies(args[1], block.return_value);
+            }
+
         }
         break;
     }
-    case OpVectorShuffle:
-    {
-        if (length < 4)
-            return false;
 
-        add_dependancies(args[1], args[2]);
-        add_dependancies(args[1], args[3]);
-        break;
-    }
-    case OpExtInst:
-    {
-        if (length < 5)
-            return false;
-
-        for (uint32_t i = 4; i < length; i++)
-        {
-            add_dependancies(args[1], args[i]);
-        }
-        break;
-    }
     case OpAtomicISub:
     case OpAtomicIAdd:
     {
@@ -1634,43 +1180,15 @@ bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *
         break;
     }
 
-    case OpUGreaterThan:
-    case OpSGreaterThan:
-    case OpUGreaterThanEqual:
-    case OpSGreaterThanEqual:
-    case OpULessThan:
-    case OpSLessThan:
-    case OpULessThanEqual:
-    case OpSLessThanEqual:
-    case OpFOrdEqual:
-    case OpFUnordEqual:
-    case OpFOrdNotEqual:
-    case OpFUnordNotEqual:
-    case OpFOrdLessThan:
-    case OpFUnordLessThan:
-    case OpFOrdGreaterThan:
-    case OpFUnordGreaterThan:
-    case OpFOrdLessThanEqual:
-    case OpFUnordLessThanEqual:
-    case OpFOrdGreaterThanEqual:
-    case OpFUnordGreaterThanEqual:
-    case OpLessOrGreater:
-    case OpOrdered:
-    case OpUnordered:
-    case OpLogicalEqual:
-    case OpLogicalNotEqual:
-    case OpLogicalOr:
-    case OpLogicalAnd:
-    case OpLogicalNot:
-        break;
-
     default:
     {
-        // what is the default opcode
-        printf("unknown opcode : %d\n", opcode);
+        for (uint32_t i = 2; i < length; i++)
+        {
+            add_dependancies(args[1], args[i]);
+        }
+        break;
     }
     }
-
     return true;
 }
 
@@ -2237,4 +1755,940 @@ void CompilerISPC::emit_access_chain(const Instruction &instruction)
 string CompilerISPC::layout_for_member(const SPIRType &, uint32_t)
 {
     return "";
+}
+
+
+void CompilerISPC::codegen_default_binary_op(std::string type, uint32_t width, std::string op)
+{
+    vector<string> varying = { "uniform ", "varying " };
+    vector<string> arg_swizzles = { ".x", ".y", ".z", ".w" };
+
+    for (auto& arg1 : varying)
+    {
+        for (auto& arg2 : varying)
+        {
+            auto& ret_varying = (arg1 != arg2) ? varying[1] : arg1;
+
+            // scalar
+            std::string s = join("inline ", ret_varying, type, width, " operator", op, "(", arg1, type, width, " a, ", arg2, type, " b) { ");
+            s += join(ret_varying, type, width, " ret = { ");
+            for (uint32_t ii = 0; ii < width; ii++)
+            {
+                s += join("a", arg_swizzles[ii], " ", op, " b ");
+                if ((ii + 1) < width)
+                    s += ", ";
+            }
+            s += join("}; return ret; }");
+            statement(s);
+
+            // vector
+            s = join("inline ", ret_varying, type, width, " operator", op, "(", arg1, type, width, " a, ", arg2, type, width, " b) { ");
+            s += join(ret_varying, type, width, " ret = { ");
+            for (uint32_t ii = 0; ii < width; ii++)
+            {
+                s += join("a", arg_swizzles[ii], " ", op, " b", arg_swizzles[ii], " ");
+                if ((ii + 1) < width)
+                    s += ", ";
+            }
+            s += join("}; return ret; }");
+            statement(s);
+        }
+    }
+    statement("");
+}
+
+void CompilerISPC::codegen_load_op(std::string type, uint32_t width)
+{
+    vector<string> varying = { "uniform ", "varying " };
+    vector<string> arg_swizzles = { ".x", ".y", ".z", ".w" };
+
+    for (auto& v : varying)
+    {
+        statement("inline ", v, type, width, " load", width, "(", v, type, width, " a)");
+        begin_scope();
+        string args;
+        for (uint32_t ii = 0; ii < width; ii++)
+        {
+            args += join("a", arg_swizzles[ii]);
+            if ((ii + 1) < width)
+                args += ", ";
+        }
+        statement("return ", type, width, "_init(", args, ");");
+        end_scope();
+        statement("");
+    }
+}
+
+void CompilerISPC::codegen_store_op(std::string type, uint32_t width)
+{
+    vector<string> varying = { "uniform ", "varying " };
+    vector<string> arg_swizzles = { ".x", ".y", ".z", ".w" };
+    for (auto& v : varying)
+    {
+        statement("inline ", v, type, width, " store", width, "(", v, type, width, " a)");
+        begin_scope();
+        statement(v, type, width, " ret;");
+
+        string args;
+        for (uint32_t ii = 0; ii < width; ii++)
+        {
+            statement("ret", arg_swizzles[ii], " = a", arg_swizzles[ii], ";");
+        }
+        statement("return ret;");
+        end_scope();
+        statement("");
+    }
+}
+
+void CompilerISPC::codegen_default_structs(std::string type, uint32_t width)
+{
+    std::vector<string> arg_swizzles = { "x", "y", "z", "w" };
+    statement("struct ", type, width);
+    begin_scope();
+    string args;
+    for (uint32_t ii = 0; ii < width; ii++)
+    {
+        statement(type, " ", arg_swizzles[ii], ";");
+    }
+    end_scope_decl();
+    statement("");
+}
+
+void CompilerISPC::codegen_constructor(std::string type, bool varying, uint32_t width, uint32_t arg_count, uint32_t arg_width[4])
+{
+    std::vector<string> arg_names = { "a", "b", "c", "d" };
+    std::vector<string> arg_swizzles = { ".x", ".y", ".z", ".w" };
+
+    std::vector<string> vector_names = { "varying ", "uniform " };
+    std::string v = vector_names[varying ? 0 : 1];
+
+    uint32_t function_count = 1;
+    if (varying && arg_count > 1)
+        function_count = 2;
+
+    // For varying functions, create 2 variants
+    // 1 - func (varying, varying)
+    // 2 - func (varying, uniform)
+    // Could do more, but that will suffice for now
+    for (uint32_t ii = 0; ii < function_count; ii++)
+    {
+        // Create signature
+        string args = "";
+        for (uint32_t ac = 0; ac < arg_count; ac++)
+        {
+            if ((ac == arg_count - 1) && (function_count > 1))
+                args += vector_names[ii];
+            else
+                args += v;
+
+            args += join("const ", type);   // varying const float
+            if (arg_width[ac] > 1)
+            {
+                args += join(arg_width[ac]);        // varying const float2
+                args += "&";                        // varying const float2&
+            }
+            args += join(" ", arg_names[ac]);       // varying const float2& a
+            if ((ac + 1) < arg_count)
+                args += ", ";
+        }
+
+        // Create list initialiser
+        string init;
+        uint32_t required_initialisers = 0;
+        while (required_initialisers < width)
+        {
+            for (uint32_t ac = 0; ac < arg_count; ac++)
+            {
+                for (uint32_t aw = 0; aw < arg_width[ac]; aw++)
+                {
+                    required_initialisers++;
+
+                    init += arg_names[ac];
+                    if (arg_width[ac] > 1)
+                        init += arg_swizzles[aw];
+                    if (required_initialisers < width)
+                        init += ", ";
+                }
+            }
+        }
+        statement("inline ", v, type, width, " ", type, width, "_init(", args, " ) { ", v, type, width, " ret = { ", init, " }; return ret; }");
+    }
+}
+
+// varyings/vector widths are : return, arg1, arg2, arg3
+void CompilerISPC::codegen_ternary_float_op_multiple_widths(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::vector<uint32_t>> &vector_widths, const std::function<void(std::vector<std::string> varyings, std::vector<uint32_t> vector_widths)> &func)
+{
+    statement("//////////////////////////////");
+    statement("// ", func_name);
+    statement("//////////////////////////////");
+
+    for (auto &w : vector_widths)
+    {
+        for (auto &v : varyings)
+        {
+            // pass by ref if non POD
+            std::string op = join("inline ", v[0], " float");
+            if (w[0] > 1)
+                op += join(w[0]);
+            op += join(" ", func_name, "(", v[1], " float");
+            if (w[1] > 1)
+                op += join(w[1], "&");
+            op += join(" a, ", v[2], " float");
+            if (w[2] > 1)
+                op += join(w[2], "&");
+            op += join(" b, ", v[3], " float");
+            if (w[3] > 1)
+                op += join(w[3], "&");
+            op += join(" c)");
+
+            statement(op);
+            begin_scope();
+            func(v, w);
+            end_scope();
+            statement("");
+        }
+    }
+};
+
+// varyings/vector widths are : return, arg1, arg2, arg3
+void CompilerISPC::codegen_ternary_float_op(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> &vector_width, const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func)
+{
+    statement("//////////////////////////////");
+    statement("// ", func_name);
+    statement("//////////////////////////////");
+
+    for (auto &w : vector_width)
+    {
+        for (auto &v : varyings)
+        {
+            if (w == 1)
+                statement("inline ", v[0], " float ", func_name, "(", v[1], " float a, ", v[2], " float b, ", v[3], " float c)");
+            else
+                statement("inline ", v[0], " float", w, " ", func_name, "(", v[1], " float", w, "& a, ", v[2], " float", w, "& b, ", v[3], " float", w, "& c)");
+
+            begin_scope();
+            func(v, w);
+            end_scope();
+            statement("");
+        }
+    }
+};
+
+// varyings/vector widths are : return, arg1, arg2
+void CompilerISPC::codegen_ternary_float_op_simple(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> &vector_width)
+{
+    codegen_ternary_float_op(func_name, varyings, vector_width, [&](std::vector<std::string> varyings, int vector_width)
+    {
+        std::string s;
+        if (vector_width == 1)
+            s = join(varyings[0], " float ret = { ", func_name, "(a.x, b.x, c.x)");
+        else
+            s = join(varyings[0], " float", vector_width, " ret = { ", func_name, "(a.x, b.x, c.x)");
+        if (vector_width > 1) s += join(", ", func_name, "(a.y, b.y, c.y)");
+        if (vector_width > 2) s += join(", ", func_name, "(a.z, b.z, c.z)");
+        if (vector_width > 3) s += join(", ", func_name, "(a.w, b.w, c.w)");
+        s += " }; return ret;";
+        statement(s);
+    });
+};
+
+// varyings/vector widths are : return, arg1, arg2, arg3
+void CompilerISPC::codegen_ternary_float_op_scalar_return(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> &vector_width, const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func)
+{
+    statement("//////////////////////////////");
+    statement("// ", func_name);
+    statement("//////////////////////////////");
+
+    for (auto &w : vector_width)
+    {
+        for (auto &v : varyings)
+        {
+            if (w == 1)
+                statement("inline ", v[0], " float ", func_name, "(", v[1], " float a, ", v[2], " float b, ", v[3], " float c)");
+            else
+                statement("inline ", v[0], " float ", func_name, "(", v[1], " float", w, "& a, ", v[2], " float", w, "& b, ", v[3], " float", w, "& c)");
+
+            begin_scope();
+            func(v, w);
+            end_scope();
+            statement("");
+        }
+    }
+};
+
+// varyings/vector widths are : return, arg1, arg2
+void CompilerISPC::codegen_binary_float_op(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> &vector_width, const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func)
+{
+    statement("//////////////////////////////");
+    statement("// ", func_name);
+    statement("//////////////////////////////");
+
+    for (auto &w : vector_width)
+    {
+        for (auto &v : varyings)
+        {
+            if (w == 1)
+                statement("inline ", v[0], " float ", func_name, "(", v[1], " float a, ", v[2], " float b)");
+            else
+                statement("inline ", v[0], " float", w, " ", func_name, "(", v[1], " float", w, "& a, ", v[2], " float", w, "& b)");
+
+            begin_scope();
+            func(v, w);
+            end_scope();
+            statement("");
+        }
+    }
+};
+
+// varyings/vector widths are : return, arg1, arg2
+void CompilerISPC::codegen_binary_float_op_simple(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> &vector_width)
+{
+    codegen_binary_float_op(func_name, varyings, vector_width, [&](std::vector<std::string> varyings, int vector_width)
+    {
+        std::string s;
+        if (vector_width == 1)
+            s = join(varyings[0], " float ret = { ", func_name, "(a.x, b.x)");
+        else
+            s = join(varyings[0], " float", vector_width, " ret = { ", func_name, "(a.x, b.x)");
+        if (vector_width > 1) s += join(", ", func_name, "(a.y, b.y)");
+        if (vector_width > 2) s += join(", ", func_name, "(a.z, b.z)");
+        if (vector_width > 3) s += join(", ", func_name, "(a.w, b.w)");
+        s += " }; return ret;";
+        statement(s);
+    });
+};
+
+void CompilerISPC::codegen_binary_float_op_scalar_return(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> &vector_width, const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func)
+{
+    statement("//////////////////////////////");
+    statement("// ", func_name);
+    statement("//////////////////////////////");
+
+    for (auto &w : vector_width)
+    {
+        for (auto &v : varyings)
+        {
+            if (w == 1)
+                statement("inline ", v[0], " float ", func_name, "(", v[1], " float a, ", v[2], " float b)");
+            else
+                statement("inline ", v[0], " float ", func_name, "(", v[1], " float", w, "& a, ", v[2], " float", w, "& b)");
+            
+
+            begin_scope();
+            func(v, w);
+            end_scope();
+            statement("");
+        }
+    }
+};
+
+// varyings/vector widths are : return, arg1, arg2
+void CompilerISPC::codegen_unary_float_op(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> &vector_width, const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func)
+{
+    statement("//////////////////////////////");
+    statement("// ", func_name);
+    statement("//////////////////////////////");
+
+    for (auto &w : vector_width)
+    {
+        for (auto &v : varyings)
+        {
+            if (w == 1)
+                statement("inline ", v[0], " float ", func_name, "(", v[1], " float a)");
+            else
+                statement("inline ", v[0], " float", w, " ", func_name, "(", v[1], " float", w, "& a)");
+
+            begin_scope();
+            func(v, w);
+            end_scope();
+            statement("");
+        }
+    }
+};
+
+// varyings/vector widths are : return, arg1, arg2
+void CompilerISPC::codegen_unary_float_op_scalar_return(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> &vector_width, const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func)
+{
+    statement("//////////////////////////////");
+    statement("// ", func_name);
+    statement("//////////////////////////////");
+
+    for (auto &w : vector_width)
+    {
+        for (auto &v : varyings)
+        {
+            if (w == 1)
+                statement("inline ", v[0], " float ", func_name, "(", v[1], " float a)");
+            else
+                statement("inline ", v[0], " float ", func_name, "(", v[1], " float", w, "& a)");
+
+            begin_scope();
+            func(v, w);
+            end_scope();
+            statement("");
+        }
+    }
+};
+
+// varyings/vector widths are : return, arg1
+void CompilerISPC::codegen_unary_float_op_simple(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> &vector_width)
+{
+    codegen_unary_float_op(func_name, varyings, vector_width, [&](std::vector<std::string> varyings, int vector_width)
+    {
+        std::string s;
+        if (vector_width == 1)
+            s = join(varyings[0], " float ret = { ", func_name, "(a.x)");
+        else
+            s = join(varyings[0], " float", vector_width, " ret = { ", func_name, "(a.x)");
+        if (vector_width > 1) s += join(", ", func_name, "(a.y)");
+        if (vector_width > 2) s += join(", ", func_name, "(a.z)");
+        if (vector_width > 3) s += join(", ", func_name, "(a.w)");
+        s += " }; return ret;";
+        statement(s);
+    });
+};
+
+// varyings/vector widths are : return, arg1, arg2
+void CompilerISPC::codegen_unary_float_op_scalar_bool_return(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> &vector_width, const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func)
+{
+    statement("//////////////////////////////");
+    statement("// ", func_name);
+    statement("//////////////////////////////");
+
+    for (auto &w : vector_width)
+    {
+        for (auto &v : varyings)
+        {
+            if (w == 1)
+                statement("inline ", v[0], " bool ", func_name, "(", v[1], " float a)");
+            else
+                statement("inline ", v[0], " bool ", func_name, "(", v[1], " float", w, "& a)");
+
+            begin_scope();
+            func(v, w);
+            end_scope();
+            statement("");
+        }
+    }
+};
+
+// varyings/vector widths are : return, arg1
+void CompilerISPC::codegen_unary_float_op_int_return(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> &vector_width, const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func)
+{
+    statement("//////////////////////////////");
+    statement("// ", func_name);
+    statement("//////////////////////////////");
+
+    for (auto &w : vector_width)
+    {
+        for (auto &v : varyings)
+        {
+            if (w == 1)
+                statement("inline ", v[0], " int ", func_name, "(", v[1], " float a)");
+            else
+                statement("inline ", v[0], " int",w, " ", func_name, "(", v[1], " float", w, "& a)");
+
+            begin_scope();
+            func(v, w);
+            end_scope();
+            statement("");
+        }
+    }
+};
+
+// varyings/vector widths are : return, arg1, arg2
+void CompilerISPC::codegen_unary_op_scalar_return(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::string> &types, std::vector<uint32_t> &vector_width,
+    const std::function<void(std::vector<std::string> varyings, std::vector<std::string> types, uint32_t vector_width)> &func)
+{
+    statement("//////////////////////////////");
+    statement("// ", func_name);
+    statement("//////////////////////////////");
+
+    for (auto &w : vector_width)
+    {
+        for (auto &v : varyings)
+        {
+            if (w == 1)
+                statement("inline ", v[0], " ", types[0], " ", func_name, "(", v[1], " ", types[1], " a)");
+            else
+                statement("inline ", v[0], " ", types[0], " ", func_name, "(", v[1], " ", types[1], w, "& a)");
+
+            begin_scope();
+            func(v, types, w);
+            end_scope();
+            statement("");
+        }
+    }
+};
+
+// varyings/vector widths are : return, arg1, arg2
+void CompilerISPC::codegen_binary_op_scalar_return(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::string> &types, std::vector<uint32_t> &vector_width,
+    const std::function<void(std::vector<std::string> varyings, std::vector<std::string> types, uint32_t vector_width)> &func)
+{
+    statement("//////////////////////////////");
+    statement("// ", func_name);
+    statement("//////////////////////////////");
+
+    for (auto &w : vector_width)
+    {
+        for (auto &v : varyings)
+        {
+            if (w == 1)
+                statement("inline ", v[0], " ", types[0], " ", func_name, "(", v[1], " ", types[1], " a, ", v[2], " ", types[2], " b)");
+            else
+                statement("inline ", v[0], " ", types[0], " ", func_name, "(", v[1], " ", types[1], w, "& a, ", v[2], " ", types[2], w, "& b)");
+
+            begin_scope();
+            func(v, types, w);
+            end_scope();
+            statement("");
+        }
+    }
+};
+
+void CompilerISPC::codegen_binary_op(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::string> &types, std::vector<uint32_t> &vector_width,
+    const std::function<void(std::vector<std::string> varyings, std::vector<std::string> types, uint32_t vector_width)> &func)
+{
+    statement("//////////////////////////////");
+    statement("// ", func_name);
+    statement("//////////////////////////////");
+
+    for (auto &w : vector_width)
+    {
+        for (auto &v : varyings)
+        {
+            if (w == 1)
+                statement("inline ", v[0], " ", types[0], " ", func_name, "(", v[1], " ", types[1], " a, ", v[2], " ", types[2], " b)");
+            else
+                statement("inline ", v[0], " ", types[0], w, " ", func_name, "(", v[1], " ", types[1], w, "& a, ", v[2], " ", types[2], w, "& b)");
+
+            begin_scope();
+            func(v, types, w);
+            end_scope();
+            statement("");
+        }
+    }
+};
+
+void CompilerISPC::emit_stdlib()
+{
+    auto &execution = get_entry_point();
+
+    statement("//////////////////////////////");
+    statement("// This ISPC spirv stdlib kernel is autogenerated by spirv-cross.");
+    statement("//////////////////////////////");
+
+    statement("");
+    statement("//////////////////////////////");
+    statement("// Default Types");
+    statement("//////////////////////////////");
+    statement("typedef float mat3[3][3];");
+    statement("typedef float mat4[4][4];");
+
+    for (const string& t : std::vector<string> { "float", "int", "bool" })
+    {
+        for (const uint32_t& w : std::vector<uint32_t> { 1, 2, 3, 4 })
+        {
+            codegen_default_structs(t, w);
+        }
+    }
+    statement("");
+
+    // These provide us with some simple codegen to cast uniforms to varyings.
+    // Is a no-op when casting a varying to a varying.
+    statement("//////////////////////////////");
+    statement("// Default Varying Casts");
+    statement("//////////////////////////////");
+    for (const string& t : std::vector<string> { "float", "int" }) //"bool" There seems to be an issue with bools
+    {
+        for (const string& v : std::vector<string> { "uniform", "varying" })
+        {
+            for (const uint32_t& w : std::vector<uint32_t> { 1, 2, 3, 4 })
+            {
+                std::string op = join("inline varying ", t);
+                if (w > 1)
+                    op += join(w);
+                op += join(" to_varying(");
+                op += join(v, " ", t);
+                if (w > 1)
+                    op += join(w, "&");
+                op += join(" a) { return (varying ", t);
+                if (w > 1)
+                    op += join(w);
+                op += ")a; }";
+                statement(op);
+            }
+        }
+    }
+    statement("");
+
+    statement("//////////////////////////////");
+    statement("// Default Constructors");
+    statement("//////////////////////////////");
+    for (const string& t : std::vector<string>{ "float", "int", "bool" })
+    {
+        for (const bool& v : std::vector<bool> { true, false })
+        {
+            for (const uint32_t& w : std::vector<uint32_t>{ 2, 3, 4 })
+            {
+                uint32_t arg_widths[][4] = {
+                    { 1, 1, 1, 1 }, // all
+                    { 2, 1, 1, 1 }, // float 3 and larger
+                    { 3, 1, 1, 1 }, // float 4 and larger
+                };
+
+                codegen_constructor(t, v, w, 1, arg_widths[0]);
+                codegen_constructor(t, v, w, w, arg_widths[0]);
+
+                if (w > 2)
+                {
+                    codegen_constructor(t, v, w, w - 1, arg_widths[1]);
+                }
+                if (w > 3)
+                {
+                    codegen_constructor(t, v, w, w - 2, arg_widths[2]);
+                }
+            }
+            statement("");
+        }
+    }
+
+    statement("");
+    statement("//////////////////////////////");
+    statement("// Default Operators");
+    statement("//////////////////////////////");
+
+    //    { "*", "/", "%", "+", "-" };
+    for (const string& t : std::vector<string> { "float", "int" })
+    {
+        for (const uint32_t& w : std::vector<uint32_t> { 2, 3, 4 })
+        {
+            //            codegen_load_op(t, w);
+            //            codegen_store_op(t, w);
+            for (const string& bop : std::vector<string> { "*", "/", "+", "-" })
+            {
+                codegen_default_binary_op(t, w, bop);
+            }
+        }
+    }
+
+    //
+    // Ternary Op 
+    //
+    {
+        vector<vector<string>> default_varying = {
+            { "varying", "varying", "varying", "varying" },
+            { "uniform", "uniform", "uniform", "uniform" },
+        };
+        vector<vector<string>> mixed_varying = {
+            { "varying", "varying", "uniform", "uniform" },
+            { "uniform", "uniform", "uniform", "uniform" },
+        };
+
+        // NOTE the uniform args for clamp
+        codegen_ternary_float_op_simple("clamp", mixed_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_ternary_float_op("mix", default_varying, vector<uint32_t> { 1, 2, 3, 4 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            statement("return a + c * (b - a);");
+        });
+        codegen_ternary_float_op("fma", default_varying, vector<uint32_t> { 1, 2, 3, 4 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            statement("return a * b + c;");
+        });
+        codegen_ternary_float_op("smoothstep", default_varying, vector<uint32_t> { 1 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            statement(varyings[0], " float t = clamp((c - a) / (b - a), 0.0f, 1.0f);");
+            statement("return t * t * (3.0f - 2.0f * t);");
+        });
+        codegen_ternary_float_op_simple("smoothstep", default_varying, vector<uint32_t> { 2, 3, 4 });
+#if 0
+        // Refract has different argument widths, as the last argument is scalar
+        // This is causing an issue in ISPC - not investigated yet.
+        vector<vector<uint32_t>> widths = { { 2, 2, 2, 1 },{ 3, 3, 3, 1 },{ 4, 4, 4, 1 } };
+        codegen_ternary_float_op_multiple_widths("refract", default_varying, widths, [&](std::vector<std::string> varyings, std::vector<uint32_t> vector_widths)
+        {
+            statement(varyings[0], " float", vector_widths[0], " ret;");
+            statement(varyings[0], " float k = 1.0f - c * c * (1.0f - dot(b, a) * dot(b, a));");
+            statement("if (k < 0.0f) ret = float", vector_widths[0], "_init(0.0f);");
+            statement("else ret = float", vector_widths[0], "_init(c) * a - float", vector_widths[0], "_init(c * dot(b, a) + sqrt(k)) * b;");
+            statement("return ret;");
+        });
+#endif
+    }
+
+    //
+    // Binary Op 
+    //
+    {
+        vector<vector<string>> default_varying = {
+            { "varying", "varying", "varying" },
+            { "varying", "varying", "uniform" },
+            { "varying", "uniform", "varying" },
+            { "uniform", "uniform", "uniform" },
+        };
+
+        vector<vector<string>> mixed_varying = {
+            { "varying", "varying", "uniform" },
+            { "varying", "uniform", "varying" },
+        };
+
+
+        codegen_binary_float_op_scalar_return("dot", default_varying, vector<uint32_t> { 2, 3, 4 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            switch (vector_width)
+            {
+            case 4: statement("return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;"); break;
+            case 3: statement("return a.x * b.x + a.y * b.y + a.z * b.z;"); break;
+            case 2: statement("return a.x * b.x + a.y * b.y;"); break;
+            }
+        });
+
+        codegen_binary_float_op("reflect", default_varying, vector<uint32_t> { 2, 3, 4 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            statement("return a - b * (dot(a, b) * 2.0f);");
+        });
+
+        codegen_binary_float_op_scalar_return("distance", default_varying, vector<uint32_t> { 1, 2, 3, 4 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            switch (vector_width)
+            {
+            case 1: statement("return abs(a - b);"); break;
+            default: statement("return sqrt(dot(a, b));"); break;
+            }
+        });
+
+
+        // all varying or all uniform versions already exist
+        codegen_binary_float_op("min", mixed_varying, vector<uint32_t> { 1 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            // uniforms need promoting to varying for the select to work and any implicit conversions
+            if (varyings[0] == "varying")
+            {
+                statement("return min(to_varying(a), to_varying(b));");
+            }
+            else
+            {
+                statement("return min(a, b)");
+            }
+        });
+        codegen_binary_float_op_simple("min", default_varying, vector<uint32_t> { 2, 3, 4 });
+
+        codegen_binary_float_op("max", mixed_varying, vector<uint32_t> { 1 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            // uniforms need promoting to varying for the select to work and any implicit conversions
+            if (varyings[0] == "varying")
+            {
+                statement("return max(to_varying(a), to_varying(b));");
+            }
+            else
+            {
+                statement("return max(a, b)");
+            }
+        });
+        codegen_binary_float_op_simple("max", default_varying, vector<uint32_t> { 2, 3, 4 });
+
+        codegen_binary_float_op("step", default_varying, vector<uint32_t> { 1 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            // uniforms need promoting to varying for the select to work and any implicit conversions
+            if (varyings[0] == "varying")
+            {
+                statement("return to_varying(b) >= to_varying(a) ? 1.0f : 0.0f;");
+            }
+            else
+            {
+                statement("return b >= a ? 1.0f : 0.0f;");
+            }
+        });
+        codegen_binary_float_op_simple("step", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_binary_float_op_simple("pow", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_binary_float_op("mod", default_varying, vector<uint32_t> { 1 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            // uniforms need promoting to varying for the select to work and any implicit conversions
+            if (varyings[0] == "varying")
+            {
+                statement("varying float va = a;");
+                statement("varying float vb = b;");
+                statement("return va - vb * floor(va / vb);");
+            }
+            else
+            {
+                statement("return a - b * floor(a / b);");
+            }
+        });
+        codegen_binary_float_op_simple("mod", default_varying, vector<uint32_t> { 2, 3, 4 });
+
+        // Return a bool
+        codegen_binary_op("notEqual", default_varying, vector<string> { "bool", "float", "float" }, vector<uint32_t> { 1, 2, 3, 4 }, [&](std::vector<std::string> varyings, std::vector<std::string> types, int vector_width)
+        {
+            switch (vector_width)
+            {
+            case 1: statement("return a != b;"); break;
+            case 2: statement(varyings[0], " ", types[0], vector_width, " ret = { a.x != b.x, a.y != b.y }; return ret;"); break;
+            case 3: statement(varyings[0], " ", types[0], vector_width, " ret = { a.x != b.x, a.y != b.y, a.z != b.z }; return ret;"); break;
+            case 4: statement(varyings[0], " ", types[0], vector_width, " ret = { a.x != b.x, a.y != b.y, a.z != b.z, a.w != b.w }; return ret;"); break;
+            }
+        });
+
+        // float3 version only
+        codegen_binary_float_op("cross", default_varying, vector<uint32_t> { 3 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            statement(varyings[0], " float", vector_width, " ret;");
+            statement("ret.x = (a.y * b.z) - (a.z * b.y);");
+            statement("ret.y = (a.z * b.x) - (a.x * b.z);");
+            statement("ret.z = (a.x * b.y) - (a.y * b.x);");
+            statement("return ret;");
+        });
+
+    }
+
+    //
+    // Unnary Op 
+    //
+    {
+        vector<vector<string>> default_varying = {
+            { "varying", "varying" },
+            { "uniform", "uniform" },
+        };
+
+
+        codegen_unary_float_op_scalar_return("length", default_varying, vector<uint32_t> { 2, 3, 4 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            statement("return sqrt(dot(a, a));");
+        });
+
+        codegen_unary_float_op_simple("abs", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op_simple("acos", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op_simple("asin", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op_simple("atan", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op_simple("cos", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op_simple("sin", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op_simple("tan", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op_simple("floor", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op_simple("round", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op_simple("ceil", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op_simple("log", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op("log2", default_varying, vector<uint32_t> { 1 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            statement("return log(a) / log(2.0f);");
+        });
+        codegen_unary_float_op_simple("log2", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op_simple("rcp", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op_simple("sqrt", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op_simple("rsqrt", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op_simple("exp", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op("cosh", default_varying, vector<uint32_t> { 1 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            statement("return (exp(a) + exp(-a)) / 2.0f;");
+        });
+        codegen_unary_float_op_simple("cosh", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op("sinh", default_varying, vector<uint32_t> { 1 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            statement("return (exp(a) - exp(-a)) / 2.0f;");
+        });
+        codegen_unary_float_op_simple("sinh", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op("tanh", default_varying, vector<uint32_t> { 1 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            statement("return sinh(a) / cosh(a);");
+        });
+        codegen_unary_float_op_simple("tanh", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op("degrees", default_varying, vector<uint32_t> { 1 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            statement("return (180.0f * a) / PI;");
+        });
+        codegen_unary_float_op_simple("degrees", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op("radians", default_varying, vector<uint32_t> { 1 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            statement("return (PI * a) / 180.0f;");
+        });
+        codegen_unary_float_op_simple("radians", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op("fract", default_varying, vector<uint32_t> { 1, 2, 3, 4 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            statement("return a - floor(a);");
+        });
+        codegen_unary_float_op("normalize", default_varying, vector<uint32_t> { 2, 3, 4 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            statement("return a / length(a);");
+        });
+        codegen_unary_float_op("sign", default_varying, vector<uint32_t> { 1 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            statement("return (a < 0.0f) ? -1 : 1;");
+        });
+        codegen_unary_float_op_simple("sign", default_varying, vector<uint32_t> { 2, 3, 4 });
+        codegen_unary_float_op("exp2", default_varying, vector<uint32_t> { 1 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            statement("return pow(2.0f, a);");
+        });
+        codegen_unary_float_op_simple("exp2", default_varying, vector<uint32_t> { 2, 3, 4 });
+
+
+        // Int return type
+        codegen_unary_float_op_int_return("trunc", vector<vector<string>> { { "varying", "varying" }}, vector<uint32_t> { 1, 2, 3, 4 }, [&](std::vector<std::string> varyings, int vector_width)
+        {
+            switch (vector_width)
+            {
+            case 1:  statement("return (int)floor(a);"); break;
+            case 2: statement(varyings[0], " int", vector_width, " ret = { trunc(a.x), trunc(a.y) }; return ret;"); break;
+            case 3: statement(varyings[0], " int", vector_width, " ret = { trunc(a.x), trunc(a.y), trunc(a.z) }; return ret;"); break;
+            case 4: statement(varyings[0], " int", vector_width, " ret = { trunc(a.x), trunc(a.y), trunc(a.z), trunc(a.w)}; return ret;"); break;
+            }
+        });
+
+        // Scalar return
+        codegen_unary_op_scalar_return("all", vector<vector<string>> { { "varying", "varying" }}, vector<string> {"bool", "bool" }, vector<uint32_t> { 2, 3, 4 }, [&](std::vector<std::string> varyings, std::vector<std::string> types, int vector_width)
+        {
+            switch (vector_width)
+            {
+            case 2: statement("return all(a.x) && all(a.y);"); break;
+            case 3: statement("return all(a.x) && all(a.y) && all(a.z);"); break;
+            case 4: statement("return all(a.x) && all(a.y) && all(a.z) && all(a.w);"); break;
+            }
+        });
+
+        codegen_unary_op_scalar_return("any", vector<vector<string>> { { "varying", "varying" }}, vector<string> {"bool", "bool" }, vector<uint32_t> { 2, 3, 4 }, [&](std::vector<std::string> varyings, std::vector<std::string> types, int vector_width)
+        {
+            switch (vector_width)
+            {
+            case 2: statement("return any(a.x) || any(a.y);"); break;
+            case 3: statement("return any(a.x) || any(a.y) || any(a.z);"); break;
+            case 4: statement("return any(a.x) || any(a.y) || any(a.z) || any(a.w);"); break;
+            }
+        });
+    }
+
+    // Atomics
+    // Currently implemented assumed atomic buffer counters. Probably needs work for non buffer based atomics
+    {
+        statement("");
+        statement("//////////////////////////////");
+        statement("// Atomics");
+        statement("//////////////////////////////");
+        vector<string> op = { "atomic_add", "atomic_subtract", "atomic_min", "atomic_max", "atomic_and", "atomic_or", "atomic_xor" };
+        for (auto &o : op)
+        {
+            statement("inline varying int ", o, "(uniform int * uniform ptr, varying int value)");
+            begin_scope();
+            statement("uniform int ret[programCount];");
+            statement("foreach_active(instance)");
+            begin_scope();
+            statement("uniform int val = extract(value, instance);");
+            statement("ret[instance] = ", o, "_global(ptr, val);");
+            end_scope();
+            statement("varying int vRet = *((varying int * uniform) &ret);");
+            statement("return vRet;");
+            end_scope();
+            statement("");
+
+            statement("inline varying int ", o, "(uniform int * uniform ptr, uniform int value)");
+            begin_scope();
+            statement("uniform int ret[programCount];");
+            statement("foreach_active(instance)");
+            begin_scope();
+            statement("ret[instance] = ", o, "_global(ptr, value);");
+            end_scope();
+            statement("varying int vRet = *((varying int * uniform) &ret);");
+            statement("return vRet;");
+            end_scope();
+            statement("");
+        }
+    }
 }

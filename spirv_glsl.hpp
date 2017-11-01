@@ -177,6 +177,13 @@ public:
 	// The name of the uniform array will be the same as the interface block name.
 	void flatten_buffer_block(uint32_t id);
 
+    // ISPC will create a stdlib of helper functions. 
+    // These should be written out once and automaticaly included in all kernels
+    std::string get_stdlib_source() { return stdlib_buffer ? stdlib_buffer->str() : ""; }
+
+    // Stdlib filename
+    std::string get_stdlib_filename() { return backend.stdlib_filename; }
+
 protected:
 	void reset();
 	void emit_function(SPIRFunction &func, uint64_t return_flags);
@@ -214,7 +221,8 @@ protected:
 	virtual void emit_uniform(const SPIRVariable &var);
 	virtual std::string unpack_expression_type(std::string expr_str, const SPIRType &type);
 
-	std::unique_ptr<std::ostringstream> buffer;
+	std::unique_ptr<std::ostringstream> buffer = nullptr;
+    std::unique_ptr<std::ostringstream> stdlib_buffer = nullptr;
 
 	template <typename T>
 	inline void statement_inner(T &&t)
@@ -307,6 +315,7 @@ protected:
 		bool native_row_major_matrix = true;
 		bool use_constructor_splatting = true;
 		bool boolean_mix_support = true;
+        std::string stdlib_filename = "sprivcross_stdlib";
 	} backend;
 
 	void emit_struct(SPIRType &type);

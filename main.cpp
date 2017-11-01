@@ -892,8 +892,28 @@ int main(int argc, char *argv[])
 	for (uint32_t i = 0; i < args.iterations; i++)
 		glsl = compiler->compile();
 
-	if (args.output)
-		write_string_to_file(args.output, glsl.c_str());
-	else
-		printf("%s", glsl.c_str());
+    if (args.output)
+    {
+        write_string_to_file(args.output, glsl.c_str());
+
+
+        // write stdlib if needed
+        std::string stdlib_source = compiler->get_stdlib_source();
+        if (!stdlib_source.empty())
+        {
+            // automatically name the interface after the filename
+            string path = args.output;
+            size_t seperator = path.find_last_of("\\/");
+            if (seperator != std::string::npos)
+                path = path.substr(0, seperator + 1) + compiler->get_stdlib_filename();
+            else
+                path = compiler->get_stdlib_filename();
+
+            write_string_to_file(path.c_str(), stdlib_source.c_str());
+        }
+    }
+    else
+    {
+        printf("%s", glsl.c_str());
+    }
 }
