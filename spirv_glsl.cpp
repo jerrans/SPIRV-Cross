@@ -13,20 +13,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
- ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
- // Copyright (c) 2017, Intel Corporation
- // Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated 
- // documentation files (the "Software"), to deal in the Software without restriction, including without limitation 
- // the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
- // permit persons to whom the Software is furnished to do so, subject to the following conditions:
- // The above copyright notice and this permission notice shall be included in all copies or substantial portions of 
- // the Software.
- // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
- // THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
- // AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, 
- // TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE 
- // SOFTWARE.
- /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////// 
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2017, Intel Corporation
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+// documentation files (the "Software"), to deal in the Software without restriction, including without limitation
+// the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+// permit persons to whom the Software is furnished to do so, subject to the following conditions:
+// The above copyright notice and this permission notice shall be included in all copies or substantial portions of
+// the Software.
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+// THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #include "spirv_glsl.hpp"
 #include "GLSL.std.450.h"
 #include <algorithm>
@@ -1697,8 +1697,9 @@ void CompilerGLSL::emit_resources()
 			auto &type = get<SPIRType>(var.basetype);
 
 			if (var.storage != StorageClassFunction && type.pointer && type.storage == StorageClassUniform &&
-			    !is_hidden_variable(var) && (meta[type.self].decoration.decoration_flags &
-			                                 ((1ull << DecorationBlock) | (1ull << DecorationBufferBlock))))
+			    !is_hidden_variable(var) &&
+			    (meta[type.self].decoration.decoration_flags &
+			     ((1ull << DecorationBlock) | (1ull << DecorationBufferBlock))))
 			{
 				emit_buffer_block(var);
 			}
@@ -1994,8 +1995,8 @@ string CompilerGLSL::to_expression(uint32_t id)
 
 	case TypeAccessChain:
 		// We cannot express this type. They only have meaning in other OpAccessChains, OpStore or OpLoad.
-//jk		SPIRV_CROSS_THROW("Access chains have no default expression representation.");
-        return "urgh acces chain";
+		//jk		SPIRV_CROSS_THROW("Access chains have no default expression representation.");
+		return "urgh acces chain";
 
 	default:
 		return to_name(id);
@@ -2374,7 +2375,7 @@ string CompilerGLSL::declare_temporary(uint32_t result_type, uint32_t result_id)
 		if (find_if(begin(header.declare_temporary), end(header.declare_temporary),
 		            [result_type, result_id](const pair<uint32_t, uint32_t> &tmp) {
 			            return tmp.first == result_type && tmp.second == result_id;
-			        }) == end(header.declare_temporary))
+		            }) == end(header.declare_temporary))
 		{
 			header.declare_temporary.emplace_back(result_type, result_id);
 			force_recompile = true;
@@ -2385,7 +2386,8 @@ string CompilerGLSL::declare_temporary(uint32_t result_type, uint32_t result_id)
 	else
 	{
 		// The result_id has not been made into an expression yet, so use flags interface.
-		return join(flags_to_precision_qualifiers_glsl(type, flags), variable_decl(type, to_name(result_id), result_id), " = ");
+		return join(flags_to_precision_qualifiers_glsl(type, flags), variable_decl(type, to_name(result_id), result_id),
+		            " = ");
 	}
 }
 
@@ -2601,8 +2603,9 @@ void CompilerGLSL::emit_quaternary_func_op(uint32_t result_type, uint32_t result
                                            uint32_t op2, uint32_t op3, const char *op)
 {
 	bool forward = should_forward(op0) && should_forward(op1) && should_forward(op2) && should_forward(op3);
-	emit_op(result_type, result_id, join(op, "(", to_expression(op0), ", ", to_expression(op1), ", ",
-	                                     to_expression(op2), ", ", to_expression(op3), ")"),
+	emit_op(result_type, result_id,
+	        join(op, "(", to_expression(op0), ", ", to_expression(op1), ", ", to_expression(op2), ", ",
+	             to_expression(op3), ")"),
 	        forward);
 
 	inherit_expression_dependencies(result_id, op0);
@@ -3531,18 +3534,27 @@ void CompilerGLSL::emit_glsl_op(uint32_t result_type, uint32_t id, uint32_t eop,
 	}
 }
 
-string CompilerGLSL::bitcast_glsl_op(const SPIRType &out_type, const SPIRType &in_type)
+bool CompilerGLSL::is_trivial_bitcast_glsl_op(const SPIRType &out_type, const SPIRType &in_type)
 {
 	if (out_type.basetype == SPIRType::UInt && in_type.basetype == SPIRType::Int)
-		return type_to_glsl(out_type);
+		return true;
 	else if (out_type.basetype == SPIRType::UInt64 && in_type.basetype == SPIRType::Int64)
-		return type_to_glsl(out_type);
-	else if (out_type.basetype == SPIRType::UInt && in_type.basetype == SPIRType::Float)
-		return "floatBitsToUint";
+		return true;
 	else if (out_type.basetype == SPIRType::Int && in_type.basetype == SPIRType::UInt)
-		return type_to_glsl(out_type);
+		return true;
 	else if (out_type.basetype == SPIRType::Int64 && in_type.basetype == SPIRType::UInt64)
+		return true;
+	else
+		return false;
+}
+
+string CompilerGLSL::bitcast_glsl_op(const SPIRType &out_type, const SPIRType &in_type)
+{
+	if (is_trivial_bitcast_glsl_op(out_type, in_type))
 		return type_to_glsl(out_type);
+
+	if (out_type.basetype == SPIRType::UInt && in_type.basetype == SPIRType::Float)
+		return "floatBitsToUint";
 	else if (out_type.basetype == SPIRType::Int && in_type.basetype == SPIRType::Float)
 		return "floatBitsToInt";
 	else if (out_type.basetype == SPIRType::Float && in_type.basetype == SPIRType::UInt)
@@ -5490,8 +5502,8 @@ void CompilerGLSL::emit_instruction(const Instruction &instruction)
 		register_read(ops[1], ops[2], should_forward(ops[2]));
 		break;
 
-	// OpAtomicStore unimplemented. Not sure what would use that.
-	// OpAtomicLoad seems to only be relevant for atomic counters.
+		// OpAtomicStore unimplemented. Not sure what would use that.
+		// OpAtomicLoad seems to only be relevant for atomic counters.
 
 	case OpAtomicIIncrement:
 		forced_temporaries.insert(ops[1]);

@@ -107,6 +107,6 @@ private:
 
 	void emit_io_block(const SPIRVariable &var);
 };
-}
+} // namespace spirv_cross
 
 #endif

@@ -74,6 +74,6 @@ private:
 	std::atomic<unsigned> count;
 	std::atomic<unsigned> iteration;
 };
-}
+} // namespace spirv_cross
 
 #endif

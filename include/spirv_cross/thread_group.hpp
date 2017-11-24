@@ -108,6 +108,6 @@ private:
 	};
 	Thread workers[Size];
 };
-}
+} // namespace spirv_cross
 
 #endif

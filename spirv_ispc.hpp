@@ -1,17 +1,17 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Copyright (c) 2017, Intel Corporation
-// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated 
-// documentation files (the "Software"), to deal in the Software without restriction, including without limitation 
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+// documentation files (the "Software"), to deal in the Software without restriction, including without limitation
 // the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
 // permit persons to whom the Software is furnished to do so, subject to the following conditions:
-// The above copyright notice and this permission notice shall be included in all copies or substantial portions of 
+// The above copyright notice and this permission notice shall be included in all copies or substantial portions of
 // the Software.
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
-// THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, 
-// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE 
+// THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////// 
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /*
  * Copyright 2015-2017 ARM Limited
  *
@@ -32,9 +32,9 @@
 #define SPIRV_CROSS_ISPC_HPP
 
 #include "spirv_glsl.hpp"
+#include <set>
 #include <utility>
 #include <vector>
-#include <set>
 
 namespace spirv_cross
 {
@@ -63,30 +63,38 @@ public:
 		interface_name = std::move(name);
 	}
 
+	// Sets the debug flags.
+	// Currently disables inline functions
+	void set_debug()
+	{
+		debug = true;
+	}
+
 protected:
-    // Specifically for the ISPC compiler
-    // Look for potential targets to vectorise
-    struct VectorisationHandler : OpcodeHandler
-    {
-        VectorisationHandler(CompilerISPC &compiler_)
-            : compiler(compiler_)
-        {
-        }
+	// Specifically for the ISPC compiler
+	// Look for potential targets to vectorise
+	struct VectorisationHandler : OpcodeHandler
+	{
+		VectorisationHandler(CompilerISPC &compiler_)
+		    : compiler(compiler_)
+		{
+		}
 
-        bool handle(spv::Op opcode, const uint32_t *args, uint32_t length) override;
-        bool propogate_ispc_varyings_for_builtins();
-        bool propogate_ispc_varyings(const uint32_t var);
-        CompilerISPC &compiler;
+		void set_current_block(const SPIRBlock &);
+		bool handle(spv::Op opcode, const uint32_t *args, uint32_t length) override;
+		bool propogate_ispc_varyings_for_builtins();
+		bool propogate_ispc_varyings(const uint32_t var);
+		void dump_varying_dependancies();
+		CompilerISPC &compiler;
 
-        std::unordered_map<uint32_t, std::unordered_set<uint32_t>> dependee_hierarchy; // a = b; a is dependant upon b, so [b] = a
-
-    };
-
+		std::unordered_map<uint32_t, std::unordered_set<uint32_t>>
+		    dependee_hierarchy; // a = b; a is dependant upon b, so [b] = a
+	};
 
 private:
 	void emit_header() override;
 	void emit_c_linkage();
-    void emit_ispc_main();
+	void emit_ispc_main();
 	void emit_function_prototype(SPIRFunction &func, uint64_t return_flags) override;
 
 	void emit_resources();
@@ -97,83 +105,127 @@ private:
 	void emit_uniform(const SPIRVariable &var) override;
 	void emit_shared(const SPIRVariable &var);
 	void emit_block_struct(SPIRType &type);
-    void emit_instruction(const Instruction &instruction) override;
-    void emit_glsl_op(uint32_t result_type, uint32_t result_id, uint32_t op, const uint32_t *args,
-        uint32_t count) override;
-    std::string read_access_chain(const SPIRAccessChain &chain);
-    void emit_load(const Instruction &instruction);
-    void emit_store(const Instruction &instruction);
-    void emit_access_chain(const Instruction &instruction);
-    void emit_stdlib();
+	void emit_instruction(const Instruction &instruction) override;
+	void emit_glsl_op(uint32_t result_type, uint32_t result_id, uint32_t op, const uint32_t *args,
+	                  uint32_t count) override;
+	std::string read_access_chain(const SPIRAccessChain &chain);
+	void emit_load(const Instruction &instruction);
+	void emit_store(const Instruction &instruction);
+	void emit_access_chain(const Instruction &instruction);
+	void emit_stdlib();
+	void emit_struct(SPIRType &type);
+	void emit_specialization_constants();
 
-
-    std::string variable_decl(const SPIRType &type, const std::string &name, uint32_t id) override;
+	std::string variable_decl(const SPIRType &type, const std::string &name, uint32_t id) override;
 
 	std::string argument_decl(const SPIRFunction::Parameter &arg);
-    std::string type_to_glsl(const SPIRType &type, uint32_t id = 0) override;
-    std::string type_to_glsl_constructor(const SPIRType &type) override;
+	std::string type_to_glsl(const SPIRType &type, uint32_t id = 0) override;
+	std::string type_to_glsl_constructor(const SPIRType &type) override;
+	std::string bitcast_glsl_op(const SPIRType &result_type, const SPIRType &argument_type) override;
 
-    void find_vectorisation_variables();
+	void find_vectorisation_variables();
 
-    void extract_global_variables_from_functions();
-    std::unordered_map<uint32_t, std::set<uint32_t>> function_global_vars;
-    void extract_global_variables_from_function(uint32_t func_id, std::set<uint32_t> &added_arg_ids,
-        std::unordered_set<uint32_t> &global_var_ids,
-        std::unordered_set<uint32_t> &processed_func_ids);
-    void localize_global_variables();
-    std::string ensure_valid_name(std::string name, std::string pfx);
-    std::string CompilerISPC::entry_point_args(bool append_comma, bool want_builtins);
-    std::string CompilerISPC::entry_point_args_init(bool append_comma, bool want_builtins);
-    void find_entry_point_args();
-    std::string layout_for_member(const SPIRType &type, uint32_t index) override;
-    bool optimize_read_modify_write(const std::string &lhs, const std::string &rhs) { return false; }
+	void extract_global_variables_from_functions();
+	std::unordered_map<uint32_t, std::set<uint32_t>> function_global_vars;
+	void extract_global_variables_from_function(uint32_t func_id, std::set<uint32_t> &added_arg_ids,
+	                                            std::unordered_set<uint32_t> &global_var_ids,
+	                                            std::unordered_set<uint32_t> &processed_func_ids);
+	void localize_global_variables();
+	std::string ensure_valid_name(std::string name, std::string pfx);
+	std::string CompilerISPC::entry_point_args(bool append_comma, bool want_builtins);
+	std::string CompilerISPC::entry_point_args_init(bool append_comma, bool want_builtins);
+	void find_entry_point_args();
+	std::string layout_for_member(const SPIRType &type, uint32_t index) override;
+	bool optimize_read_modify_write(const std::string &lhs, const std::string &rhs)
+	{
+		return false;
+	}
 
-    std::vector<std::string> resource_registrations;
-    std::vector<std::string> resource_entry_arguments;
-    std::vector<std::string> resource_entry_arguments_init;
+	std::vector<std::string> resource_registrations;
+	std::vector<std::string> resource_entry_arguments;
+	std::vector<std::string> resource_entry_arguments_init;
 
-    std::vector<Variant*> entry_point_ids;
-    
-    std::string impl_type;
+	std::vector<Variant *> entry_point_ids;
+
+	std::string impl_type;
 	std::string resource_type;
 	uint32_t shared_counter = 0;
 
 	std::string interface_name;
 
-    std::unordered_map<uint32_t, bool> varyings;
+	bool debug = false;
 
-    // stdlib codegen
-    void codegen_constructor(std::string type, bool varying, uint32_t width, uint32_t arg_count, uint32_t arg_width[4]);
-    void codegen_load_op(std::string type, uint32_t width);
-    void codegen_store_op(std::string type, uint32_t width);
-    void codegen_default_structs(std::string type, uint32_t width);
-    void codegen_default_binary_op(std::string type, uint32_t width, std::string op);
+	std::unordered_map<uint32_t, bool> varyings;
 
+	// stdlib codegen
+	void codegen_constructor(std::string type, bool varying, uint32_t width, uint32_t arg_count, uint32_t arg_width[4]);
+	void codegen_load_op(std::string type, uint32_t width);
+	void codegen_store_op(std::string type, uint32_t width);
+	void codegen_default_structs(std::string type, uint32_t width);
+	void codegen_default_image_structs(uint32_t width);
+	void codegen_default_pixel_structs(uint32_t width);
+	void codegen_default_binary_op(std::string type, uint32_t width, std::string op);
 
-    void codegen_unary_float_op(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::uint32_t> &vector_width, const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
-    void codegen_unary_float_op_scalar_return(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::uint32_t> &vector_width, const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
-    void codegen_unary_float_op_scalar_bool_return(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> &vector_width, const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
-    void codegen_unary_float_op_simple(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> &vector_width);
-    void codegen_unary_float_op_int_return(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> &vector_width, const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
+	void codegen_unary_float_op(
+	    std::string func_name, std::vector<std::vector<std::string>> &varyings,
+	    std::vector<std::uint32_t> &vector_width,
+	    const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
+	void codegen_unary_float_op_scalar_return(
+	    std::string func_name, std::vector<std::vector<std::string>> &varyings,
+	    std::vector<std::uint32_t> &vector_width,
+	    const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
+	void codegen_unary_float_op_scalar_bool_return(
+	    std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> &vector_width,
+	    const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
+	void codegen_unary_float_op_simple(std::string func_name, std::vector<std::vector<std::string>> &varyings,
+	                                   std::vector<uint32_t> &vector_width);
+	void codegen_unary_float_op_int_return(
+	    std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> &vector_width,
+	    const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
 
-    void codegen_binary_float_op(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::uint32_t> &vector_width, const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
-    void codegen_binary_float_op_scalar_return(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::uint32_t> &vector_width, const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
-    void codegen_binary_float_op_simple(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> &vector_width);
+	void codegen_binary_float_op(
+	    std::string func_name, std::vector<std::vector<std::string>> &varyings,
+	    std::vector<std::uint32_t> &vector_width,
+	    const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
+	void codegen_binary_float_op_scalar_return(
+	    std::string func_name, std::vector<std::vector<std::string>> &varyings,
+	    std::vector<std::uint32_t> &vector_width,
+	    const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
+	void codegen_binary_float_op_simple(std::string func_name, std::vector<std::vector<std::string>> &varyings,
+	                                    std::vector<uint32_t> &vector_width);
 
-    void codegen_ternary_float_op(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::uint32_t> &vector_width, const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
-    void codegen_ternary_float_op_scalar_return(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::uint32_t> &vector_width, const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
-    void codegen_ternary_float_op_simple(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> &vector_width);
-    void codegen_ternary_float_op_multiple_widths(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::vector<uint32_t>> &vector_widths, const std::function<void(std::vector<std::string> varyings, std::vector<uint32_t> vector_widths)> &func);
+	void codegen_ternary_float_op(
+	    std::string func_name, std::vector<std::vector<std::string>> &varyings,
+	    std::vector<std::uint32_t> &vector_width,
+	    const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
+	void codegen_ternary_float_op_scalar_return(
+	    std::string func_name, std::vector<std::vector<std::string>> &varyings,
+	    std::vector<std::uint32_t> &vector_width,
+	    const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
+	void codegen_ternary_float_op_simple(std::string func_name, std::vector<std::vector<std::string>> &varyings,
+	                                     std::vector<uint32_t> &vector_width);
+	void codegen_ternary_float_op_multiple_widths(
+	    std::string func_name, std::vector<std::vector<std::string>> &varyings,
+	    std::vector<std::vector<uint32_t>> &vector_widths,
+	    const std::function<void(std::vector<std::string> varyings, std::vector<uint32_t> vector_widths)> &func);
 
-    void codegen_unary_op_scalar_return(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::string> &types, std::vector<uint32_t> &vector_width,
-        const std::function<void(std::vector<std::string> varyings, std::vector<std::string> types, uint32_t vector_width)> &func);
+	void codegen_unary_op_scalar_return(
+	    std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::string> &types,
+	    std::vector<uint32_t> &vector_width,
+	    const std::function<void(std::vector<std::string> varyings, std::vector<std::string> types,
+	                             uint32_t vector_width)> &func);
 
-    void codegen_binary_op_scalar_return(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::string> &types, std::vector<uint32_t> &vector_width,
-        const std::function<void(std::vector<std::string> varyings, std::vector<std::string> types, uint32_t vector_width)> &func);
+	void codegen_binary_op_scalar_return(
+	    std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::string> &types,
+	    std::vector<uint32_t> &vector_width,
+	    const std::function<void(std::vector<std::string> varyings, std::vector<std::string> types,
+	                             uint32_t vector_width)> &func);
 
-    void codegen_binary_op(std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::string> &types, std::vector<uint32_t> &vector_width,
-        const std::function<void(std::vector<std::string> varyings, std::vector<std::string> types, uint32_t vector_width)> &func);
+	void codegen_binary_op(std::string func_name, std::vector<std::vector<std::string>> &varyings,
+	                       std::vector<std::string> &types, std::vector<uint32_t> &vector_width,
+	                       const std::function<void(std::vector<std::string> varyings, std::vector<std::string> types,
+	                                                uint32_t vector_width)> &func);
 };
-}
+} // namespace spirv_cross
 
 #endif

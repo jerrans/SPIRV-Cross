@@ -89,7 +89,7 @@ void join_helper(std::ostringstream &stream, T &&t, Ts &&... ts)
 	stream << std::forward<T>(t);
 	join_helper(stream, std::forward<Ts>(ts)...);
 }
-}
+} // namespace inner
 
 // Helper template to avoid lots of nasty string temporary munging.
 template <typename... Ts>
@@ -1007,6 +1007,7 @@ struct Meta
 		uint32_t input_attachment = 0;
 		uint32_t spec_id = 0;
 		bool builtin = false;
+		uint32_t runtime_array_padding = 0; // does a member struct require padding for a run time array
 	};
 
 	Decoration decoration;
@@ -1045,6 +1046,6 @@ public:
 private:
 	std::locale old;
 };
-}
+} // namespace spirv_cross
 
 #endif

@@ -13,20 +13,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
- ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
- // Copyright (c) 2017, Intel Corporation
- // Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated 
- // documentation files (the "Software"), to deal in the Software without restriction, including without limitation 
- // the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
- // permit persons to whom the Software is furnished to do so, subject to the following conditions:
- // The above copyright notice and this permission notice shall be included in all copies or substantial portions of 
- // the Software.
- // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
- // THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
- // AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, 
- // TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE 
- // SOFTWARE.
- /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////// 
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2017, Intel Corporation
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+// documentation files (the "Software"), to deal in the Software without restriction, including without limitation
+// the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+// permit persons to whom the Software is furnished to do so, subject to the following conditions:
+// The above copyright notice and this permission notice shall be included in all copies or substantial portions of
+// the Software.
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+// THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #include "spirv_cpp.hpp"
 #include "spirv_glsl.hpp"
 #include "spirv_hlsl.hpp"
@@ -458,9 +458,9 @@ struct CLIArguments
 {
 	const char *input = nullptr;
 	const char *output = nullptr;
-    const char *cpp_interface_name = nullptr;
-    const char *ispc_interface_name = nullptr;
-    uint32_t version = 0;
+	const char *cpp_interface_name = nullptr;
+	const char *ispc_interface_name = nullptr;
+	uint32_t version = 0;
 	uint32_t shader_model = 0;
 	bool es = false;
 	bool set_version = false;
@@ -490,6 +490,7 @@ struct CLIArguments
 	bool remove_unused = false;
 	bool cfg_analysis = true;
 	bool ispc = false;
+	bool ispc_debug = false;
 };
 
 static void print_help()
@@ -499,9 +500,9 @@ static void print_help()
 	                "[--vulkan-semantics] [--flatten-ubo] [--fixup-clipspace] [--flip-vert-y] [--iterations iter] "
 	                "[--cpp] [--cpp-interface-name <name>] "
 	                "[--msl] "
-                    "[--hlsl] [--shader-model] [--hlsl-enable-compat] "
-                    "[--ispc] [--ispc-interface-name]"
-                    "[--separate-shader-objects]"
+	                "[--hlsl] [--shader-model] [--hlsl-enable-compat] "
+	                "[--ispc] [--ispc-interface-name]"
+	                "[--separate-shader-objects]"
 	                "[--pls-in format input-name] [--pls-out format output-name] [--remap source_name target_name "
 	                "components] [--extension ext] [--entry name] [--remove-unused-variables] "
 	                "[--flatten-multidimensional-arrays] "
@@ -645,9 +646,13 @@ int main(int argc, char *argv[])
 	cbs.add("--msl", [&args](CLIParser &) { args.msl = true; });
 	cbs.add("--hlsl", [&args](CLIParser &) { args.hlsl = true; });
 	cbs.add("--hlsl-enable-compat", [&args](CLIParser &) { args.hlsl_compat = true; });
-    cbs.add("--ispc", [&args](CLIParser &) { args.ispc = true; });
-    cbs.add("--ispc-interface-name", [&args](CLIParser &parser) { args.ispc_interface_name = parser.next_string(); });
-    cbs.add("--vulkan-semantics", [&args](CLIParser &) { args.vulkan_semantics = true; });
+	cbs.add("--ispc", [&args](CLIParser &) {
+		args.ispc = true;
+		args.vulkan_semantics = true;
+	});
+	cbs.add("--ispc-debug", [&args](CLIParser &) { args.ispc_debug = true; });
+	cbs.add("--ispc-interface-name", [&args](CLIParser &parser) { args.ispc_interface_name = parser.next_string(); });
+	cbs.add("--vulkan-semantics", [&args](CLIParser &) { args.vulkan_semantics = true; });
 	cbs.add("--flatten-multidimensional-arrays", [&args](CLIParser &) { args.flatten_multidimensional_arrays = true; });
 	cbs.add("--extension", [&args](CLIParser &parser) { args.extensions.push_back(parser.next_string()); });
 	cbs.add("--entry", [&args](CLIParser &parser) { args.entry = parser.next_string(); });
@@ -733,30 +738,31 @@ int main(int argc, char *argv[])
 		auto msl_opts = msl_comp->get_options();
 		msl_comp->set_options(msl_opts);
 	}
-    else if (args.hlsl)
-        compiler = unique_ptr<CompilerHLSL>(new CompilerHLSL(read_spirv_file(args.input)));
-    else if (args.ispc)
-    {
-        compiler = unique_ptr<CompilerISPC>(new CompilerISPC(read_spirv_file(args.input)));
-        if (args.ispc_interface_name)
-            static_cast<CompilerISPC *>(compiler.get())->set_interface_name(args.ispc_interface_name);
-        else
-        {
-            // automatically name the interface after the filename
-            string path = args.input;
-            size_t seperator = path.find_last_of("\\/");
-            if (seperator != std::string::npos)
-                path = path.substr(seperator + 1, path.size() - seperator - 1);
+	else if (args.hlsl)
+		compiler = unique_ptr<CompilerHLSL>(new CompilerHLSL(read_spirv_file(args.input)));
+	else if (args.ispc)
+	{
+		compiler = unique_ptr<CompilerISPC>(new CompilerISPC(read_spirv_file(args.input)));
+		if (args.ispc_interface_name)
+			static_cast<CompilerISPC *>(compiler.get())->set_interface_name(args.ispc_interface_name);
+		else
+		{
+			// automatically name the interface after the filename
+			string path = args.input;
+			size_t seperator = path.find_last_of("\\/");
+			if (seperator != std::string::npos)
+				path = path.substr(seperator + 1, path.size() - seperator - 1);
 
-            size_t dot = path.find_first_of(".");
-            if (dot != std::string::npos)
-                path = path.substr(0, dot);
+			size_t dot = path.find_first_of(".");
+			if (dot != std::string::npos)
+				path = path.substr(0, dot);
 
-            static_cast<CompilerISPC *>(compiler.get())->set_interface_name(path);
-
-        }
-    }
-    else
+			static_cast<CompilerISPC *>(compiler.get())->set_interface_name(path);
+		}
+		if (args.ispc_debug)
+			static_cast<CompilerISPC *>(compiler.get())->set_debug();
+	}
+	else
 	{
 		combined_image_samplers = !args.vulkan_semantics;
 		compiler = unique_ptr<CompilerGLSL>(new CompilerGLSL(read_spirv_file(args.input)));
@@ -892,28 +898,27 @@ int main(int argc, char *argv[])
 	for (uint32_t i = 0; i < args.iterations; i++)
 		glsl = compiler->compile();
 
-    if (args.output)
-    {
-        write_string_to_file(args.output, glsl.c_str());
+	if (args.output)
+	{
+		write_string_to_file(args.output, glsl.c_str());
 
+		// write stdlib if needed
+		std::string stdlib_source = compiler->get_stdlib_source();
+		if (!stdlib_source.empty())
+		{
+			// automatically name the interface after the filename
+			string path = args.output;
+			size_t seperator = path.find_last_of("\\/");
+			if (seperator != std::string::npos)
+				path = path.substr(0, seperator + 1) + compiler->get_stdlib_filename();
+			else
+				path = compiler->get_stdlib_filename();
 
-        // write stdlib if needed
-        std::string stdlib_source = compiler->get_stdlib_source();
-        if (!stdlib_source.empty())
-        {
-            // automatically name the interface after the filename
-            string path = args.output;
-            size_t seperator = path.find_last_of("\\/");
-            if (seperator != std::string::npos)
-                path = path.substr(0, seperator + 1) + compiler->get_stdlib_filename();
-            else
-                path = compiler->get_stdlib_filename();
-
-            write_string_to_file(path.c_str(), stdlib_source.c_str());
-        }
-    }
-    else
-    {
-        printf("%s", glsl.c_str());
-    }
+			write_string_to_file(path.c_str(), stdlib_source.c_str());
+		}
+	}
+	else
+	{
+		printf("%s", glsl.c_str());
+	}
 }

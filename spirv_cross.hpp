@@ -682,6 +682,6 @@ protected:
 	std::vector<spv::Capability> declared_capabilities;
 	std::vector<std::string> declared_extensions;
 };
-}
+} // namespace spirv_cross
 
 #endif

@@ -13,20 +13,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
- ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
- // Copyright (c) 2017, Intel Corporation
- // Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated 
- // documentation files (the "Software"), to deal in the Software without restriction, including without limitation 
- // the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
- // permit persons to whom the Software is furnished to do so, subject to the following conditions:
- // The above copyright notice and this permission notice shall be included in all copies or substantial portions of 
- // the Software.
- // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
- // THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
- // AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, 
- // TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE 
- // SOFTWARE.
- /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////// 
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2017, Intel Corporation
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+// documentation files (the "Software"), to deal in the Software without restriction, including without limitation
+// the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+// permit persons to whom the Software is furnished to do so, subject to the following conditions:
+// The above copyright notice and this permission notice shall be included in all copies or substantial portions of
+// the Software.
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+// THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #ifndef SPIRV_CROSS_GLSL_HPP
 #define SPIRV_CROSS_GLSL_HPP
 
@@ -177,12 +177,18 @@ public:
 	// The name of the uniform array will be the same as the interface block name.
 	void flatten_buffer_block(uint32_t id);
 
-    // ISPC will create a stdlib of helper functions. 
-    // These should be written out once and automaticaly included in all kernels
-    std::string get_stdlib_source() { return stdlib_buffer ? stdlib_buffer->str() : ""; }
+	// ISPC will create a stdlib of helper functions.
+	// These should be written out once and automaticaly included in all kernels
+	std::string get_stdlib_source()
+	{
+		return stdlib_buffer ? stdlib_buffer->str() : "";
+	}
 
-    // Stdlib filename
-    std::string get_stdlib_filename() { return backend.stdlib_filename; }
+	// Stdlib filename
+	std::string get_stdlib_filename()
+	{
+		return backend.stdlib_filename;
+	}
 
 protected:
 	void reset();
@@ -222,7 +228,7 @@ protected:
 	virtual std::string unpack_expression_type(std::string expr_str, const SPIRType &type);
 
 	std::unique_ptr<std::ostringstream> buffer = nullptr;
-    std::unique_ptr<std::ostringstream> stdlib_buffer = nullptr;
+	std::unique_ptr<std::ostringstream> stdlib_buffer = nullptr;
 
 	template <typename T>
 	inline void statement_inner(T &&t)
@@ -315,7 +321,7 @@ protected:
 		bool native_row_major_matrix = true;
 		bool use_constructor_splatting = true;
 		bool boolean_mix_support = true;
-        std::string stdlib_filename = "sprivcross_stdlib";
+		std::string stdlib_filename = "sprivcross_stdlib";
 	} backend;
 
 	void emit_struct(SPIRType &type);
@@ -417,6 +423,7 @@ protected:
 
 	std::string bitcast_glsl(const SPIRType &result_type, uint32_t arg);
 	virtual std::string bitcast_glsl_op(const SPIRType &result_type, const SPIRType &argument_type);
+	virtual bool is_trivial_bitcast_glsl_op(const SPIRType &out_type, const SPIRType &in_type);
 	std::string build_composite_combiner(const uint32_t *elems, uint32_t length);
 	bool remove_duplicate_swizzle(std::string &op);
 	bool remove_unity_swizzle(uint32_t base, std::string &op);
@@ -503,6 +510,6 @@ private:
 		}
 	}
 };
-}
+} // namespace spirv_cross
 
 #endif

@@ -277,6 +277,6 @@ protected:
 		SortAspect sort_aspect;
 	};
 };
-}
+} // namespace spirv_cross
 
 #endif
