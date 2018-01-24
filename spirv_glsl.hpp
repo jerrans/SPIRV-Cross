@@ -452,13 +452,12 @@ protected:
 
 	std::string bitcast_glsl(const SPIRType &result_type, uint32_t arg);
 	virtual std::string bitcast_glsl_op(const SPIRType &result_type, const SPIRType &argument_type);
-	virtual bool is_trivial_bitcast_glsl_op(const SPIRType &out_type, const SPIRType &in_type);
 
 	std::string bitcast_expression(SPIRType::BaseType target_type, uint32_t arg);
 	std::string bitcast_expression(const SPIRType &target_type, SPIRType::BaseType expr_type, const std::string &expr);
 
 	std::string build_composite_combiner(uint32_t result_type, const uint32_t *elems, uint32_t length);
-	std::string build_composite_combiner(const uint32_t *elems, uint32_t length);
+	virtual bool is_trivial_bitcast_glsl_op(const SPIRType &out_type, const SPIRType &in_type);
 	bool remove_duplicate_swizzle(std::string &op);
 	bool remove_unity_swizzle(uint32_t base, std::string &op);
 
@@ -529,7 +528,7 @@ protected:
 
 	std::string emit_for_loop_initializers(const SPIRBlock &block);
 	bool for_loop_initializers_are_same_type(const SPIRBlock &block);
-	bool optimize_read_modify_write(const std::string &lhs, const std::string &rhs);
+	virtual bool optimize_read_modify_write(const std::string &lhs, const std::string &rhs);
 	void fixup_image_load_store_access();
 
 	bool type_is_empty(const SPIRType &type);

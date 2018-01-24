@@ -70,6 +70,14 @@ public:
 		debug = true;
 	}
 
+	// Doesn't emit any runtime array padding.
+	// HLSL doesn't seem to want to honour the arraystride option in SPV.
+	// Could be a bug in the SPV translator?
+	void set_ignore_runtimearray_padding()
+	{
+		ignore_runtimearray_padding = true;
+	}
+
 protected:
 	// Specifically for the ISPC compiler
 	// Look for potential targets to vectorise
@@ -81,14 +89,39 @@ protected:
 		}
 
 		void set_current_block(const SPIRBlock &);
+		void set_current_function(const SPIRFunction &);
+		bool begin_function_scope(const uint32_t *, uint32_t);
+		bool end_function_scope(const uint32_t *, uint32_t);
+
 		bool handle(spv::Op opcode, const uint32_t *args, uint32_t length) override;
 		bool propogate_ispc_varyings_for_builtins();
 		bool propogate_ispc_varyings(const uint32_t var);
+		bool reverse_propogate_ispc_varyings(const uint32_t var);
 		void dump_varying_dependancies();
+		void dump_varying_dependancy_branch(const uint32_t index, uint32_t tab_count, bool recurse,
+		                                    std::unordered_set<uint32_t> &branch);
+
 		CompilerISPC &compiler;
 
 		std::unordered_map<uint32_t, std::unordered_set<uint32_t>>
-		    dependee_hierarchy; // a = b; a is dependant upon b, so [b] = a
+		    dependee_hierarchy; // a = b; a is dependant upon b, so [b] = a. If a is a varying, then b must be
+		std::unordered_map<uint32_t, std::unordered_set<uint32_t>>
+		    dependant_hierarchy; // a = b; a is dependant upon b, but for return types we propogate backwards so if a is a varying, the b should be
+		// Used for reverse propogating varyings for return types. ie. If a func arg is a varying, then the return type is a varying.
+		// Anything also assigned to the return type should be a varying
+		std::set<uint32_t> reverse_propogation_varyings;
+		const SPIRBlock *current_block = nullptr;
+		const SPIRFunction *current_func = nullptr;
+		std::stack<CFG *> cfg_stack;
+
+		struct conditional_block_tracker
+		{
+			uint32_t condition = 0;
+			uint32_t next_block = 0;
+			uint32_t this_block = 0;
+			const SPIRFunction *func = nullptr;
+		};
+		std::vector<conditional_block_tracker *> condition_block_stack;
 	};
 
 private:
@@ -116,6 +149,8 @@ private:
 	void emit_struct(SPIRType &type);
 	void emit_specialization_constants();
 
+	bool maybe_emit_array_assignment(uint32_t id_lhs, uint32_t id_rhs);
+
 	std::string variable_decl(const SPIRType &type, const std::string &name, uint32_t id) override;
 
 	std::string argument_decl(const SPIRFunction::Parameter &arg);
@@ -130,6 +165,10 @@ private:
 	void extract_global_variables_from_function(uint32_t func_id, std::set<uint32_t> &added_arg_ids,
 	                                            std::unordered_set<uint32_t> &global_var_ids,
 	                                            std::unordered_set<uint32_t> &processed_func_ids);
+
+	void find_loop_variables_from_functions();
+	void find_loop_variables_from_function(uint32_t func_id, std::unordered_set<uint32_t> &processed_functions);
+
 	void localize_global_variables();
 	std::string ensure_valid_name(std::string name, std::string pfx);
 	std::string CompilerISPC::entry_point_args(bool append_comma, bool want_builtins);
@@ -154,11 +193,11 @@ private:
 	std::string interface_name;
 
 	bool debug = false;
-
-	std::unordered_map<uint32_t, bool> varyings;
+	bool ignore_runtimearray_padding = false;
 
 	// stdlib codegen
 	void codegen_constructor(std::string type, bool varying, uint32_t width, uint32_t arg_count, uint32_t arg_width[4]);
+	void codegen_cast_constructor(std::string src_type, std::string dst_type, bool varying, uint32_t width);
 	void codegen_load_op(std::string type, uint32_t width);
 	void codegen_store_op(std::string type, uint32_t width);
 	void codegen_default_structs(std::string type, uint32_t width);

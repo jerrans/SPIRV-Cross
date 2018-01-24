@@ -2003,7 +2003,6 @@ void CompilerGLSL::emit_resources()
 			auto &var = id.get<SPIRVariable>();
 			auto &type = get<SPIRType>(var.basetype);
 
-
 			bool is_block_storage = type.storage == StorageClassStorageBuffer || type.storage == StorageClassUniform;
 			bool has_block_flags = (meta[type.self].decoration.decoration_flags &
 			                        ((1ull << DecorationBlock) | (1ull << DecorationBufferBlock))) != 0;
@@ -2310,8 +2309,7 @@ string CompilerGLSL::to_expression(uint32_t id)
 
 	case TypeAccessChain:
 		// We cannot express this type. They only have meaning in other OpAccessChains, OpStore or OpLoad.
-		//jk		SPIRV_CROSS_THROW("Access chains have no default expression representation.");
-		return "urgh acces chain";
+		SPIRV_CROSS_THROW("Access chains have no default expression representation.");
 
 	default:
 		return to_name(id);
@@ -2511,7 +2509,6 @@ string CompilerGLSL::constant_expression_vector(const SPIRConstant &c, uint32_t 
 	type.columns = 1;
 
 	string res;
-		res += type_to_glsl_constructor(type) + "(";
 	bool splat = backend.use_constructor_splatting && c.vector_size() > 1;
 	bool swizzle_splat = backend.can_swizzle_scalar && c.vector_size() > 1;
 
@@ -8237,7 +8234,8 @@ void CompilerGLSL::emit_block_chain(SPIRBlock &block)
 	{
 		auto flags = meta[tmp.second].decoration.decoration_flags;
 		auto &type = get<SPIRType>(tmp.first);
-		statement(flags_to_precision_qualifiers_glsl(type, flags), variable_decl(type, to_name(tmp.second)), ";");
+		statement(flags_to_precision_qualifiers_glsl(type, flags), variable_decl(type, to_name(tmp.second), tmp.second),
+		          ";");
 	}
 
 	SPIRBlock::ContinueBlockType continue_type = SPIRBlock::ContinueNone;

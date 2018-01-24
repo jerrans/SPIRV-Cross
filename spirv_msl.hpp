@@ -77,7 +77,8 @@ public:
 	// Options for compiling to Metal Shading Language
 	struct Options
 	{
-		typedef enum {
+		typedef enum
+		{
 			iOS,
 			macOS,
 		} Platform;

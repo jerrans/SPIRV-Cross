@@ -30,6 +30,7 @@
 
 #include "spirv_ispc.hpp"
 #include "GLSL.std.450.h"
+#include "spirv_cfg.hpp"
 #include <algorithm>
 #include <assert.h>
 #include <iomanip> // std::put_time
@@ -38,7 +39,10 @@ using namespace spv;
 using namespace spirv_cross;
 using namespace std;
 
-#define DUMP_VARYING_DEPENDANCIES 1
+// pull in from spirv_cross.cpp.
+string ensure_valid_identifier(const string &name, bool member);
+
+#define DUMP_VARYING_DEPENDANCIES 0
 
 void CompilerISPC::emit_buffer_block(const SPIRVariable &var)
 {
@@ -177,17 +181,23 @@ void CompilerISPC::emit_struct(SPIRType &type)
 	{
 		auto &membertype = get<SPIRType>(member);
 
-		// if we are a runtime array, try and impose our size on the underlying type
-		// We then need to pick that up and use it for padding
-		if (!membertype.array.empty() && !membertype.array.back())
+		if (!ignore_runtimearray_padding)
 		{
-			auto array_size = get_declared_struct_size(type);
-			auto member_size = get_declared_struct_size(membertype);
-			auto padding_size = array_size - member_size;
-			if (padding_size && meta[membertype.self].decoration.runtime_array_padding != padding_size)
+			// if we are a runtime array that is a struct, we may need padding to conform to GLSL rules
+			if (!membertype.array.empty() && !membertype.array.back() && membertype.basetype == SPIRType::Struct)
 			{
-				meta[membertype.self].decoration.runtime_array_padding = padding_size;
-				force_recompile = true;
+				auto array_size = get_declared_struct_size(type);
+				auto member_size = get_declared_struct_size(membertype);
+				auto padding_size = array_size - member_size;
+				if (padding_size && meta[membertype.self].decoration.runtime_array_padding != padding_size)
+				{
+					// flag this type along with the original if it is aliased
+					meta[membertype.self].decoration.runtime_array_padding = padding_size;
+					if (membertype.type_alias)
+						meta[membertype.type_alias].decoration.runtime_array_padding = padding_size;
+
+					force_recompile = true;
+				}
 			}
 		}
 
@@ -377,10 +387,6 @@ string CompilerISPC::compile()
 	// Force a classic "C" locale, reverts when function returns
 	ClassicLocale classic_locale;
 
-	// Convert the use of global variables to recursively-passed function parameters
-	localize_global_variables();
-	extract_global_variables_from_functions();
-
 	// Do not deal with ES-isms like precision, older extensions and such.
 	options.es = false;
 	options.version = 450;
@@ -399,8 +405,6 @@ string CompilerISPC::compile()
 
 	update_active_builtins();
 
-	find_vectorisation_variables();
-
 	uint32_t pass_count = 0;
 	do
 	{
@@ -408,6 +412,17 @@ string CompilerISPC::compile()
 			SPIRV_CROSS_THROW("Over 3 compilation loops detected. Must be a bug!");
 
 		reset();
+		entry_point_ids.clear();
+
+		// Convert the use of global variables to recursively-passed function parameters
+		// Done in the compilation loop to ensure that any promoted runtimearray counts are correctly propogated
+		localize_global_variables();
+		extract_global_variables_from_functions();
+
+		// Loop variables are special cases for vectorisation.
+		find_loop_variables_from_functions();
+
+		find_vectorisation_variables();
 
 		// Move constructor for this type is broken on GCC 4.9 ...
 		// Write to the stdlib buffer, then swap the buffer pointers over.
@@ -487,65 +502,74 @@ void CompilerISPC::emit_ispc_main()
 	statement("// ISPC Entry Points");
 	statement("//////////////////////////////");
 
-	// Dispatch all
-	string decl = "export void " + entry_point_name + "_dispatch_all(uniform int work_groups[3]";
-	string args = entry_point_args(!get<SPIRFunction>(entry_point).arguments.empty(), false);
-	if (!args.empty())
-		decl = join(decl, ", ", args);
-	decl += ")";
-	statement(decl);
+	vector<string> tiled = { "", "_tiled" };
 
+	for (auto &t : tiled)
 	{
-		begin_scope();
 
-		statement("uniform int3 gl_NumWorkGroups = int3_init(work_groups[0], work_groups[1], work_groups[2]);");
-		statement("");
+		// Dispatch all
+		string decl = "export void " + entry_point_name + "_dispatch_all" + t + "(uniform int work_groups[3]";
+		string args = entry_point_args(!get<SPIRFunction>(entry_point).arguments.empty(), false);
+		if (!args.empty())
+			decl = join(decl, ", ", args);
+		decl += ")";
+		statement(decl);
 
-		statement("// Loop over the work group dimensions");
-		statement("for(uniform int z = 0; z < gl_NumWorkGroups.z; z++)");
 		{
 			begin_scope();
-			statement("for(uniform int y = 0; y < gl_NumWorkGroups.y; y++)");
+
+			statement("uniform int3 gl_NumWorkGroups = int3(work_groups[0], work_groups[1], work_groups[2]);");
+			statement("");
+
+			statement("// Loop over the work group dimensions");
+			statement("for(uniform int z = 0; z < gl_NumWorkGroups.z; z++)");
 			{
 				begin_scope();
-				statement("for(uniform int x = 0; x < gl_NumWorkGroups.x; x++)");
+				statement("for(uniform int y = 0; y < gl_NumWorkGroups.y; y++)");
 				{
 					begin_scope();
-					statement("uniform int3 gl_WorkGroupID = int3_init(x, y, z);"); //
-					statement("");
-					statement("// Vectorise the workgroup");
-					if (execution.workgroup_size.z > 1)
+					statement("for(uniform int x = 0; x < gl_NumWorkGroups.x; x++)");
 					{
-						statement("foreach(lz = 0 ... gl_WorkGroupSize.z, ly = 0 ... gl_WorkGroupSize.y, "
-						          "lx = 0 ... gl_WorkGroupSize.x)");
 						begin_scope();
-						statement("varying int3 gl_LocalInvocationID = int3_init(lx, ly, lz);");
-					}
-					else if (execution.workgroup_size.y > 1)
-					{
-						statement("foreach(ly = 0 ... gl_WorkGroupSize.y, lx = 0 ... gl_WorkGroupSize.x)");
-						begin_scope();
-						statement("varying int3 gl_LocalInvocationID = int3_init(lx, ly, 0);");
-					}
-					else
-					{
-						statement("foreach(lx = 0 ... gl_WorkGroupSize.x)");
-						begin_scope();
-						statement("varying int3 gl_LocalInvocationID = int3_init(lx, 0, 0);");
-					}
-					{
-						statement("varying int3 gl_GlobalInvocationID = gl_WorkGroupID * gl_WorkGroupSize + "
-						          "gl_LocalInvocationID;");
-						statement("varying int gl_LocalInvocationIndex = gl_LocalInvocationID.z * gl_WorkGroupSize.x * "
-						          "gl_WorkGroupSize.y + gl_LocalInvocationID.y * gl_WorkGroupSize.x + "
-						          "gl_LocalInvocationID.x;");
+						statement("uniform int3 gl_WorkGroupID = int3(x, y, z);"); //
 						statement("");
+						statement("// Vectorise the workgroup");
+						if (execution.workgroup_size.z > 1)
+						{
+							statement("foreach" + t +
+							          "(lz = 0 ... gl_WorkGroupSize.z, ly = 0 ... gl_WorkGroupSize.y, "
+							          "lx = 0 ... gl_WorkGroupSize.x)");
+							begin_scope();
+							statement("varying int3 gl_LocalInvocationID = int3(lx, ly, lz);");
+						}
+						else if (execution.workgroup_size.y > 1)
+						{
+							statement("foreach" + t + "(ly = 0 ... gl_WorkGroupSize.y, lx = 0 ... gl_WorkGroupSize.x)");
+							begin_scope();
+							statement("varying int3 gl_LocalInvocationID = int3(lx, ly, 0);");
+						}
+						else
+						{
+							statement("foreach" + t + "(lx = 0 ... gl_WorkGroupSize.x)");
+							begin_scope();
+							statement("varying int3 gl_LocalInvocationID = int3(lx, 0, 0);");
+						}
+						{
+							statement("varying int3 gl_GlobalInvocationID = gl_WorkGroupID * gl_WorkGroupSize + "
+							          "gl_LocalInvocationID;");
+							statement(
+							    "varying int gl_LocalInvocationIndex = gl_LocalInvocationID.z * gl_WorkGroupSize.x * "
+							    "gl_WorkGroupSize.y + gl_LocalInvocationID.y * gl_WorkGroupSize.x + "
+							    "gl_LocalInvocationID.x;");
+							statement("");
 
-						string decl = entry_point_name;
-						decl += "_ispc_main(";
-						decl += entry_point_args_init(!get<SPIRFunction>(entry_point).arguments.empty(), true);
-						decl += ");";
-						statement(decl);
+							string decl = entry_point_name;
+							decl += "_ispc_main(";
+							decl += entry_point_args_init(!get<SPIRFunction>(entry_point).arguments.empty(), true);
+							decl += ");";
+							statement(decl);
+							end_scope();
+						}
 						end_scope();
 					}
 					end_scope();
@@ -554,60 +578,62 @@ void CompilerISPC::emit_ispc_main()
 			}
 			end_scope();
 		}
-		end_scope();
-	}
-	statement("");
-
-	// Dispatch single
-	{
-		string decl = "export void " + entry_point_name +
-		              "_dispatch_single(uniform int work_group_ID[3], uniform int work_groups[3]";
-		string args = entry_point_args(!get<SPIRFunction>(entry_point).arguments.empty(), false);
-		if (!args.empty())
-			decl = join(decl, ", ", args);
-		decl += ")";
-		statement(decl);
-	}
-	{
-		begin_scope();
-		statement("uniform int3 gl_NumWorkGroups = int3_init(work_groups[0], work_groups[1], work_groups[2]);");
-		statement("uniform int3 gl_WorkGroupID = int3_init(work_group_ID[0], work_group_ID[1], work_group_ID[2]);");
 		statement("");
-		statement("// Vectorise the workgroup");
-		if (execution.workgroup_size.z > 1)
-		{
-			statement("foreach(lz = 0 ... gl_WorkGroupSize.z, ly = 0 ... gl_WorkGroupSize.y, "
-			          "lx = 0 ... gl_WorkGroupSize.x)");
-			begin_scope();
-			statement("varying int3 gl_LocalInvocationID = int3_init(lx, ly, lz);");
-		}
-		else if (execution.workgroup_size.y > 1)
-		{
-			statement("foreach(ly = 0 ... gl_WorkGroupSize.y, lx = 0 ... gl_WorkGroupSize.x)");
-			begin_scope();
-			statement("varying int3 gl_LocalInvocationID = int3_init(lx, ly, 0);");
-		}
-		else
-		{
-			statement("foreach(lx = 0 ... gl_WorkGroupSize.x)");
-			begin_scope();
-			statement("varying int3 gl_LocalInvocationID = int3_init(lx, 0, 0);");
-		}
-		{
-			statement("varying int3 gl_GlobalInvocationID = gl_WorkGroupID * gl_WorkGroupSize + gl_LocalInvocationID;");
-			statement("varying int gl_LocalInvocationIndex = gl_LocalInvocationID.z * gl_WorkGroupSize.x * "
-			          "gl_WorkGroupSize.y + gl_LocalInvocationID.y * gl_WorkGroupSize.x + gl_LocalInvocationID.x;");
-			statement("");
 
-			string decl = entry_point_name;
-			decl += "_ispc_main(";
-			decl += entry_point_args_init(!get<SPIRFunction>(entry_point).arguments.empty(), true);
-			decl += ");";
+		// Dispatch single
+		{
+			string decl = "export void " + entry_point_name + "_dispatch_single" + t +
+			              "(uniform int work_group_ID[3], uniform int work_groups[3]";
+			string args = entry_point_args(!get<SPIRFunction>(entry_point).arguments.empty(), false);
+			if (!args.empty())
+				decl = join(decl, ", ", args);
+			decl += ")";
 			statement(decl);
+		}
+		{
+			begin_scope();
+			statement("uniform int3 gl_NumWorkGroups = int3(work_groups[0], work_groups[1], work_groups[2]);");
+			statement("uniform int3 gl_WorkGroupID = int3(work_group_ID[0], work_group_ID[1], work_group_ID[2]);");
+			statement("");
+			statement("// Vectorise the workgroup");
+			if (execution.workgroup_size.z > 1)
+			{
+				statement("foreach" + t +
+				          "(lz = 0 ... gl_WorkGroupSize.z, ly = 0 ... gl_WorkGroupSize.y, "
+				          "lx = 0 ... gl_WorkGroupSize.x)");
+				begin_scope();
+				statement("varying int3 gl_LocalInvocationID = int3(lx, ly, lz);");
+			}
+			else if (execution.workgroup_size.y > 1)
+			{
+				statement("foreach" + t + "(ly = 0 ... gl_WorkGroupSize.y, lx = 0 ... gl_WorkGroupSize.x)");
+				begin_scope();
+				statement("varying int3 gl_LocalInvocationID = int3(lx, ly, 0);");
+			}
+			else
+			{
+				statement("foreach" + t + "(lx = 0 ... gl_WorkGroupSize.x)");
+				begin_scope();
+				statement("varying int3 gl_LocalInvocationID = int3(lx, 0, 0);");
+			}
+			{
+				statement(
+				    "varying int3 gl_GlobalInvocationID = gl_WorkGroupID * gl_WorkGroupSize + gl_LocalInvocationID;");
+				statement("varying int gl_LocalInvocationIndex = gl_LocalInvocationID.z * gl_WorkGroupSize.x * "
+				          "gl_WorkGroupSize.y + gl_LocalInvocationID.y * gl_WorkGroupSize.x + gl_LocalInvocationID.x;");
+				statement("");
 
+				string decl = entry_point_name;
+				decl += "_ispc_main(";
+				decl += entry_point_args_init(!get<SPIRFunction>(entry_point).arguments.empty(), true);
+				decl += ");";
+				statement(decl);
+
+				end_scope();
+			}
 			end_scope();
 		}
-		end_scope();
+		statement("");
 	}
 
 	statement("");
@@ -628,6 +654,8 @@ void CompilerISPC::emit_function_prototype(SPIRFunction &func, uint64_t)
 
 	auto &type = get<SPIRType>(func.return_type);
 	decl += "static SPIRV_INLINE ";
+	if (type.basetype != SPIRType::Void)
+		decl += meta[func.self].decoration.ispc_varying ? "varying " : "uniform ";
 	decl += type_to_glsl(type);
 	decl += " ";
 
@@ -686,7 +714,8 @@ string CompilerISPC::argument_decl(const SPIRFunction::Parameter &arg)
 	// arrays get confused if passed by reference
 	string passByRef = type.array.size() ? " " : "& ";
 
-	return join(varyings[arg.id] ? "varying " : "uniform ", constref ? "const " : "", base, passByRef, variable_name);
+	return join(meta[arg.id].decoration.ispc_varying ? "varying " : "uniform ", constref ? "const " : "", base,
+	            passByRef, variable_name);
 }
 
 string CompilerISPC::variable_decl(const SPIRType &type, const string &name, uint32_t id)
@@ -695,7 +724,7 @@ string CompilerISPC::variable_decl(const SPIRType &type, const string &name, uin
 
 	if (id > 0)
 	{
-		if (varyings[id])
+		if (meta[id].decoration.ispc_varying)
 			base = "varying ";
 		else
 			base = "uniform ";
@@ -964,6 +993,35 @@ string CompilerISPC::type_to_glsl(const SPIRType &type, uint32_t id)
 	}
 }
 
+// Since ISPC does not allow arrays to be copied via simple variable assignment,
+// if the LHS and RHS represent an assignment of an entire array, it must be
+// implemented by calling an array copy function.
+// Returns whether the struct assignment was emitted.
+bool CompilerISPC::maybe_emit_array_assignment(uint32_t id_lhs, uint32_t id_rhs)
+{
+	// Assignment from an array initializer is fine.
+	if (ids[id_rhs].get_type() == TypeConstant)
+		return false;
+
+	// We only care about assignments of an entire array
+	auto &type = expression_type(id_rhs);
+	if (type.array.size() == 0)
+		return false;
+
+	// Ensure the LHS variable has been declared
+	auto *p_v_lhs = maybe_get_backing_variable(id_lhs);
+	if (p_v_lhs)
+		flush_variable_declaration(p_v_lhs->self);
+
+	statement("for (uniform int ii = 0; ii < ", to_array_size(type, 0), "; ii++)");
+	begin_scope();
+	statement(to_expression(id_lhs), "[ii] = ", to_expression(id_rhs), "[ii];");
+	end_scope();
+	register_write(id_lhs);
+
+	return true;
+}
+
 void CompilerISPC::emit_instruction(const Instruction &instruction)
 {
 	auto ops = stream(instruction);
@@ -1008,7 +1066,8 @@ void CompilerISPC::emit_instruction(const Instruction &instruction)
 		// As ubo.array[idx].pos is not in contiguous memory, it is not a varying and can not be used directly.
 		// ISPC will throw an error about lvalues.
 		// TODO : only use if the expression involves a runtime array
-		expr.immutable = false;
+		if (get<SPIRType>(ops[0]).array.empty())
+			expr.immutable = false;
 		break;
 	}
 
@@ -1048,22 +1107,15 @@ void CompilerISPC::emit_instruction(const Instruction &instruction)
 		auto type = get<SPIRType>(result_type);
 		auto func = type_to_glsl_constructor(type);
 		bool forward = should_forward(ops[2]);
-		if (type.vecsize > 1 && type.columns == 1) // Scalar builtin, so no cast required
-			emit_op(result_type, id, join(func.c_str(), "(", to_expression(ops[2]), ")"), forward);
-		else
-			emit_op(result_type, id, join("(", func.c_str(), ")(", to_expression(ops[2]), ")"), forward);
+		emit_op(result_type, id, join(func.c_str(), "(", to_expression(ops[2]), ")"), forward);
+
 		inherit_expression_dependencies(id, ops[2]);
 
 		break;
 	}
 
-	// ISPC currently has an issue with shuffles.
-		// varying/uniform float<4> rhs;
-		// varying float<3> lhs;
-		// lhs = rhs.xyz  <-- This will currently cause ISPC to barf!
-	//
-	// We work around it by forcing all shuffles to go through the if(shuffle) path which uses constructor style code
-		// lhs = float3_init(rhs);
+	// ISPC doesn't support shuffles on structs, so we need to force the shuffle
+	// to use constructor style usage instead.
 	case OpVectorShuffle:
 	{
 		uint32_t result_type = ops[0];
@@ -1075,12 +1127,13 @@ void CompilerISPC::emit_instruction(const Instruction &instruction)
 
 		auto &type0 = expression_type(vec0);
 
-		// fore shuffle to true to workaround ISPC bug
+		// Force ISPC to shuffle.
 		bool shuffle = true;
-		for (uint32_t i = 0; i < length; i++)
+		/*		
+        for (uint32_t i = 0; i < length; i++)
 			if (elems[i] >= type0.vecsize)
 				shuffle = true;
-
+*/
 		string expr;
 		bool trivial_forward;
 
@@ -1173,6 +1226,67 @@ void CompilerISPC::emit_instruction(const Instruction &instruction)
 		break;
 	}
 
+	case OpStore:
+		if (maybe_emit_array_assignment(ops[0], ops[1]))
+			break;
+
+		CompilerGLSL::emit_instruction(instruction);
+		break;
+
+	// ISPC only sees a pointer for runtime arrays, so the array length needs passing in as 'meta' data.
+	// This is currently done by creating a new global input variable that is passed in via the API.
+	case OpArrayLength:
+	{
+		uint32_t result_type = ops[0];
+		uint32_t id = ops[1];
+		auto e = access_chain_internal(ops[2], &ops[3], length - 3, true);
+
+		string name = ensure_valid_identifier(e + "_runtime_array_length", false);
+
+		int32_t runtime_array_length_id = -1;
+		uint32_t runtime_array_length_type_id = 0;
+
+		// search to see if the runtime array length exists
+		// search backwards for efficiency
+		for (int target = ids.size() - 1; target >= 0; target--)
+		{
+			auto &id = ids.at(target);
+			if (id.get_type() == TypeVariable)
+			{
+				auto &var = id.get<SPIRVariable>();
+				if (get_name(var.self) == name)
+				{
+					runtime_array_length_id = var.self;
+					break;
+				}
+			}
+		}
+
+		// If it doesn't exist, create it along with a new type
+		if (runtime_array_length_id < 0)
+		{
+			uint32_t id = increase_bound_by(2);
+			runtime_array_length_type_id = id + 0;
+
+			auto &type = set<SPIRType>(runtime_array_length_type_id);
+
+			type.basetype = SPIRType::UInt;
+			type.pointer = false;
+			type.storage = StorageClassInput;
+
+			runtime_array_length_id = id + 1;
+			auto &var = set<SPIRVariable>(runtime_array_length_id, runtime_array_length_type_id, StorageClassInput);
+			set_name(runtime_array_length_id, name);
+
+			// force a recompile to ensure it is picked up as a global and pushed through the relevant entrypoints
+			force_recompile = true;
+		}
+
+		set<SPIRExpression>(id, name, result_type, true);
+		// Store the ID as decoration so we can pick it up for the entry_point propogation
+		meta[id].decoration.runtime_array_length_id = runtime_array_length_id;
+		break;
+	}
 	default:
 		CompilerGLSL::emit_instruction(instruction);
 		break;
@@ -1194,11 +1308,20 @@ string CompilerISPC::type_to_glsl_constructor(const SPIRType &type)
 	if (type.vecsize > 1 && type.columns == 1) // Scalar builtin
 	{
 		if (type.basetype == SPIRType::Float)
-			return join("float", type.vecsize, "_init");
+			return join("float", type.vecsize);
 		if (type.basetype == SPIRType::Int)
-			return join("int", type.vecsize, "_init");
+			return join("int", type.vecsize);
 		if (type.basetype == SPIRType::UInt)
-			return join("int", type.vecsize, "_init");
+			return join("int", type.vecsize);
+	}
+	else if (type.vecsize == 1 && type.columns == 1)
+	{
+		if (type.basetype == SPIRType::Float)
+			return join("float_cast");
+		if (type.basetype == SPIRType::Int)
+			return join("int_cast");
+		if (type.basetype == SPIRType::UInt)
+			return join("int_cast");
 	}
 
 	auto e = type_to_glsl(type);
@@ -1242,7 +1365,10 @@ void CompilerISPC::emit_glsl_op(uint32_t result_type, uint32_t id, uint32_t eop,
 bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *args, uint32_t length)
 {
 	// dst = src; dst is dependant upon src, so [src] = dst
-	auto add_dependancies = [&](const uint32_t dst, const uint32_t src) { dependee_hierarchy[src].insert(dst); };
+	auto add_dependancies = [&](const uint32_t dst, const uint32_t src) {
+		dependee_hierarchy[src].insert(dst);
+		dependant_hierarchy[dst].insert(src);
+	};
 
 	switch (opcode)
 	{
@@ -1276,6 +1402,46 @@ bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *
 			return false;
 
 		add_dependancies(args[0], args[1]);
+
+		auto *var = compiler.maybe_get<SPIRVariable>(args[0]);
+		if (var && !var->loop_variable)
+		{
+			// If the variable has scope outside of the blocks contained with the current conditional,
+			// add it as a dependancy on the current conditional.
+			// Walk the stack of conditionals if true.
+			unordered_set<uint32_t> visited_blocks;
+			for (auto conditional : condition_block_stack)
+			{
+				bool depend_on_condition = true;
+
+				// Only walk the dependancy if the conditional is within the current function
+				if (conditional->func != current_func)
+					depend_on_condition = false;
+				else
+				{
+					visited_blocks.clear();
+					cfg_stack.top()->walk_from(visited_blocks, current_block->self, [&](uint32_t walk_block) {
+						if (walk_block == conditional->this_block)
+							depend_on_condition = false;
+						else
+						{
+							auto &b = compiler.get<SPIRBlock>(walk_block);
+							for (auto &v : b.dominated_variables)
+							{
+
+								// Found between current block and conditional
+								if (v == args[0])
+									depend_on_condition = false;
+							}
+						}
+					});
+				}
+				if (depend_on_condition)
+				{
+					add_dependancies(args[0], conditional->condition);
+				}
+			}
+		}
 		break;
 	}
 	//    case OpFunctionParameter:
@@ -1307,11 +1473,15 @@ bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *
 		for (auto &b : func.blocks)
 		{
 			auto block = compiler.get<SPIRBlock>(b);
-
-			// OpReturnValue can return Undef, so don't add a dependancy for this
-			if (compiler.ids.at(block.return_value).get_type() != TypeUndef)
+			if (block.return_value > 0)
 			{
-				add_dependancies(args[1], block.return_value);
+				// OpReturnValue can return Undef, so don't add a dependancy for this
+				if (compiler.ids.at(block.return_value).get_type() != TypeUndef)
+				{
+					// Add dependancy for the func as well, as this is used when checking for the function signature return type
+					add_dependancies(func.self, block.return_value);
+					add_dependancies(args[1], block.return_value);
+				}
 			}
 		}
 		break;
@@ -1329,7 +1499,7 @@ bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *
 	case OpAtomicExchange:
 	{
 		// Atomics take uniform arguments (a buffer), but return varying results...
-		compiler.varyings[args[1]] = true;
+		compiler.meta[args[1]].decoration.ispc_varying = true;
 		break;
 	}
 
@@ -1345,12 +1515,107 @@ bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *
 	return true;
 }
 
+void CompilerISPC::VectorisationHandler::set_current_function(const SPIRFunction &func)
+{
+	// Create the CFG
+	cfg_stack.push(new CFG(compiler, func));
+	current_func = &cfg_stack.top()->get_function();
+}
+
+bool CompilerISPC::VectorisationHandler::begin_function_scope(const uint32_t *, uint32_t)
+{
+	return true;
+}
+
+bool CompilerISPC::VectorisationHandler::end_function_scope(const uint32_t *, uint32_t)
+{
+	CFG *cfg = cfg_stack.top();
+	if (cfg)
+		delete cfg;
+	cfg_stack.pop();
+
+	current_func = &cfg_stack.top()->get_function();
+
+	return true;
+}
+
 void CompilerISPC::VectorisationHandler::set_current_block(const SPIRBlock &block)
 {
+	current_block = &block;
+
+	if (current_block->condition)
+	{
+		conditional_block_tracker *cbt = new conditional_block_tracker;
+		cbt->condition = current_block->condition;
+		cbt->this_block = current_block->self;
+		cbt->next_block = current_block->next_block;
+		cbt->func = current_func;
+
+		if (!condition_block_stack.empty() && condition_block_stack.back()->func == current_func)
+		{
+			// Add a dependancy between multiple conditionals in the stack
+			// This will ensure that an outer conditional branch will still affect any stores
+			// that occur within the nested branches
+			dependee_hierarchy[condition_block_stack.back()->condition].insert(cbt->condition);
+		}
+
+		condition_block_stack.push_back(cbt);
+	}
+	else
+	{
+		while (!condition_block_stack.empty())
+		{
+			conditional_block_tracker *cbt = condition_block_stack.back();
+
+			bool inside_conditional = false;
+			unordered_set<uint32_t> visited_blocks;
+			visited_blocks.clear();
+
+			// walk from the top condition block and see if we see the current block. If we don't, then we have left the conditional block, so pop it.
+			cfg_stack.top()->walk_from(visited_blocks, cbt->this_block, [&](uint32_t walk_block) {
+				if (walk_block == current_block->self)
+					inside_conditional = true;
+			});
+
+			// Next block should point to the block that is executed once all conditional branches have executed
+			// So this is the point that we remove the cbt from the stack
+			if (!inside_conditional)
+			{
+				condition_block_stack.pop_back();
+				delete cbt;
+				cbt = nullptr;
+			}
+			else
+			{
+				break;
+			}
+		}
+	}
+
 	// We track the Phi variables here and add the appropriate dependancies
 	for (auto &phi : block.phi_variables)
 	{
 		dependee_hierarchy[phi.local_variable].insert(phi.function_variable);
+	}
+
+	// We need to ensure that the current return value depends on the current branch condition.
+	// This will ensure that a divergent branch that returns true/false will correctly pick up the correct varying
+	// type for the function signature
+	if (!condition_block_stack.empty() && condition_block_stack.back()->func == current_func)
+	{
+		// Don't add the dependancy if we are still on the conditional block because
+		// we haven't branched yet to the inner blocks
+		if (current_block->self != condition_block_stack.back()->this_block)
+		{
+			if (current_block->return_value > 0)
+			{
+				// OpReturnValue can return Undef, so don't add a dependancy for this
+				if (compiler.ids.at(current_block->return_value).get_type() != TypeUndef)
+				{
+					dependee_hierarchy[condition_block_stack.back()->condition].insert(current_block->return_value);
+				}
+			}
+		}
 	}
 }
 
@@ -1360,18 +1625,45 @@ bool CompilerISPC::VectorisationHandler::propogate_ispc_varyings(const uint32_t 
 	auto &varIt = dependee_hierarchy.find(var);
 	if (varIt != dependee_hierarchy.end())
 	{
-		if (compiler.varyings[var])
+		if (compiler.meta[var].decoration.ispc_varying)
 		{
 			// walk all variables that depend on var
 			for (auto &dependantVarIt : dependee_hierarchy[var])
 			{
-				if (!compiler.varyings[dependantVarIt])
+				if (!compiler.meta[dependantVarIt].decoration.ispc_varying)
 				{
-					compiler.varyings[dependantVarIt] = true;
+					compiler.meta[dependantVarIt].decoration.ispc_varying = true;
 					bPropogate = true;
 
 					// Propogate to all variables dependant upon this variable
 					propogate_ispc_varyings(dependantVarIt);
+					//                    propogate_ispc_varyings_up(dependantVarIt);
+				}
+			}
+		}
+	}
+
+	return bPropogate;
+}
+
+bool CompilerISPC::VectorisationHandler::reverse_propogate_ispc_varyings(const uint32_t var)
+{
+	bool bPropogate = false;
+	auto &varIt = dependant_hierarchy.find(var);
+	if (varIt != dependant_hierarchy.end())
+	{
+		if (compiler.meta[var].decoration.ispc_varying)
+		{
+			// walk all variables that depend on var
+			for (auto &dependantVarIt : dependant_hierarchy[var])
+			{
+				if (!compiler.meta[dependantVarIt].decoration.ispc_varying)
+				{
+					compiler.meta[dependantVarIt].decoration.ispc_varying = true;
+					bPropogate = true;
+
+					// Propogate to all variables dependant upon this variable
+					reverse_propogate_ispc_varyings(dependantVarIt);
 					//                    propogate_ispc_varyings_up(dependantVarIt);
 				}
 			}
@@ -1396,40 +1688,160 @@ bool CompilerISPC::VectorisationHandler::propogate_ispc_varyings_for_builtins()
 			case BuiltInLocalInvocationId:
 			case BuiltInGlobalInvocationId:
 			case BuiltInLocalInvocationIndex:
-				compiler.varyings[dependeeVarIt.first] = true;
+				compiler.meta[dependeeVarIt.first].decoration.ispc_varying = true;
 				bPropogate |= propogate_ispc_varyings(dependeeVarIt.first);
 			}
 		}
 		// This will catch any pre-determined varying args.
-		else if (compiler.varyings[dependeeVarIt.first])
+		else if (compiler.meta[dependeeVarIt.first].decoration.ispc_varying)
 		{
 			bPropogate |= propogate_ispc_varyings(dependeeVarIt.first);
 		}
 	}
-
+#if 0
+    // walk the reverse propogation list
+    for (auto &reverse_prop : reverse_propogation_varyings)
+    {
+        if (compiler.meta[reverse_prop].decoration.ispc_varying)
+        {
+            for (auto &dependandVarIt : dependant_hierarchy)
+            {
+                bPropogate |= reverse_propogate_ispc_varyings(dependandVarIt.first);
+            }
+        }
+    }
+#endif
 	return bPropogate;
 }
 
-void CompilerISPC::VectorisationHandler::dump_varying_dependancies()
+void CompilerISPC::VectorisationHandler::dump_varying_dependancy_branch(const uint32_t index, uint32_t tab_count,
+                                                                        bool recurse,
+                                                                        std::unordered_set<uint32_t> &branch)
 {
-	fprintf(stderr, "============\n\n");
-	fprintf(stderr, "Varying Dependancees\n\n");
-	for (auto &dependeeVarIt : dependee_hierarchy)
+	for (auto &dependantVarIt : dependee_hierarchy[index])
 	{
-		fprintf(stderr, "%s [%d] = %d\n", compiler.to_name(dependeeVarIt.first).c_str(), dependeeVarIt.first,
-		        compiler.varyings[dependeeVarIt.first]);
-		if (compiler.varyings[dependeeVarIt.first])
+		if (branch.count(dependantVarIt) == 0)
 		{
-			fprintf(stderr, "\t: ");
-			// walk all variables that depend on dependeeVar
-			for (auto &dependantVarIt2 : dependee_hierarchy[dependeeVarIt.first])
+			for (uint32_t tab = 0; tab < tab_count; tab++)
+				fprintf(stdout, "-");
+			fprintf(stdout, "> ");
+
+			fprintf(stdout, "%s [%d] : %d\n", compiler.to_name(dependantVarIt).c_str(), dependantVarIt,
+			        compiler.meta[dependantVarIt].decoration.ispc_varying);
+
+			if (recurse)
 			{
-				fprintf(stderr, "%d@%d, ", dependantVarIt2, compiler.varyings[dependantVarIt2]);
+				branch.insert(dependantVarIt);
+				dump_varying_dependancy_branch(dependantVarIt, tab_count + 1, recurse, branch);
+				//                branch.erase(dependantVarIt);
 			}
-			fprintf(stderr, "\n");
 		}
 	}
-	fprintf(stderr, "============\n\n");
+};
+
+void CompilerISPC::VectorisationHandler::dump_varying_dependancies()
+{
+	fprintf(stdout, "============\n\n");
+	fprintf(stdout, "\n\nVarying Dependancies\n\n");
+
+	std::unordered_set<uint32_t> branch;
+
+	// varyings first
+	for (auto &dependeeVarIt : dependee_hierarchy)
+	{
+		if (compiler.meta[dependeeVarIt.first].decoration.ispc_varying)
+		{
+			if (branch.count(dependeeVarIt.first) == 0)
+			{
+				fprintf(stdout, "%s [%d] : %d\n", compiler.to_name(dependeeVarIt.first).c_str(), dependeeVarIt.first,
+				        compiler.meta[dependeeVarIt.first].decoration.ispc_varying);
+				branch.insert(dependeeVarIt.first);
+				dump_varying_dependancy_branch(dependeeVarIt.first, 2, true, branch);
+				//            branch.erase(dependeeVarIt.first);
+				fprintf(stdout, "\n");
+			}
+		}
+	}
+
+	branch.clear();
+
+	// then uniforms
+	fprintf(stdout, "\n\nUniform Dependancies\n\n");
+	for (auto &dependeeVarIt : dependee_hierarchy)
+	{
+		if (!compiler.meta[dependeeVarIt.first].decoration.ispc_varying)
+		{
+			if (branch.count(dependeeVarIt.first) == 0)
+			{
+				fprintf(stdout, "%s [%d] : %d\n", compiler.to_name(dependeeVarIt.first).c_str(), dependeeVarIt.first,
+				        compiler.meta[dependeeVarIt.first].decoration.ispc_varying);
+
+				branch.insert(dependeeVarIt.first);
+				dump_varying_dependancy_branch(dependeeVarIt.first, 2, true, branch);
+				//                branch.erase(dependeeVarIt.first);
+				fprintf(stdout, "\n");
+			}
+		}
+	}
+	fprintf(stdout, "============\n\n");
+}
+
+void CompilerISPC::find_loop_variables_from_functions()
+{
+	unordered_set<uint32_t> processed_functions;
+
+	find_loop_variables_from_function(entry_point, processed_functions);
+}
+
+// For any global variable accessed directly by a function,
+// extract that variable and add it as an argument to that function.
+void CompilerISPC::find_loop_variables_from_function(uint32_t func_id,
+                                                     std::unordered_set<uint32_t> &processed_functions)
+{
+	// don't process a func multiple times
+	if (processed_functions.count(func_id) > 0)
+		return;
+
+	processed_functions.insert(func_id);
+
+	auto &func = get<SPIRFunction>(func_id);
+
+	// This *may* have side affects, but it should work out the loop variables.
+	// These are needed as we don't want to make these dependant on conditional branches
+	// and they are represented firstly by a store (initialise), followed by a loop construct.
+	// When doing the varying analysis, we don't know if it is a loop variable otherwise.
+	if (!func.analyzed_variable_scope)
+		analyze_variable_scope(func);
+
+	for (auto block : func.blocks)
+	{
+		auto &b = get<SPIRBlock>(block);
+		for (auto &i : b.ops)
+		{
+			auto ops = stream(i);
+			auto op = static_cast<Op>(i.op);
+
+			switch (op)
+			{
+			case OpFunctionCall:
+			{
+				uint32_t inner_func_id = ops[2];
+				find_loop_variables_from_function(inner_func_id, processed_functions);
+				break;
+			}
+			}
+		}
+
+		// *A* side affect of calling analyze_variable_scope is that the loop variable list is populated
+		// This can cause variables in for loop init lists to be declared twice.
+		// Same is true for temporaries
+		// Need a better solution to this... :(
+		if (!func.analyzed_variable_scope)
+		{
+			b.loop_variables.clear();
+			b.declare_temporary.clear();
+		}
+	}
 }
 
 // For any global variable accessed directly by a function,
@@ -1482,6 +1894,10 @@ void CompilerISPC::extract_global_variables_from_function(uint32_t func_id, std:
 
 	auto &func = get<SPIRFunction>(func_id);
 
+	// Function arguments get processed on each pass of the compiler due to the dynamic runtime array length variables
+	// As such, clear the arg list of any globals before starting the processing.
+	func.clear_aliased_global_variable_parameters();
+
 	// Recursively establish global args added to functions on which we depend.
 	for (auto block : func.blocks)
 	{
@@ -1511,6 +1927,17 @@ void CompilerISPC::extract_global_variables_from_function(uint32_t func_id, std:
 				added_arg_ids.insert(inner_func_args.begin(), inner_func_args.end());
 				break;
 			}
+			// Array lengths are special.
+			// In ISPC, there is no way to determine the length of a runtime array from a pointer alone, so the length is
+			// passed in as a variable. This check ensures it is propogated to all of the relevant function entry points.
+			case OpArrayLength:
+			{
+				uint32_t id = ops[1];
+				uint32_t runtime_array_length_id = meta[id].decoration.runtime_array_length_id;
+				if (runtime_array_length_id != 0)
+					if (global_var_ids.find(runtime_array_length_id) != global_var_ids.end())
+						added_arg_ids.insert(runtime_array_length_id);
+			}
 
 			default:
 				break;
@@ -1530,12 +1957,10 @@ void CompilerISPC::extract_global_variables_from_function(uint32_t func_id, std:
 			func.add_parameter(type_id, next_id, true);
 			set<SPIRVariable>(next_id, type_id, StorageClassFunction);
 
-			// Ensure both the existing and new variables have the same name, and the name is valid
-			string vld_name = ensure_valid_name(to_name(arg_id), "a");
-			set_name(arg_id, vld_name);
-			set_name(next_id, vld_name);
+			// Ensure the existing variable has a valid name and the new variable has all the same meta info
+			set_name(arg_id, ensure_valid_name(to_name(arg_id), "v"));
+			meta[next_id] = meta[arg_id];
 
-			meta[next_id].decoration.qualified_alias = meta[arg_id].decoration.qualified_alias;
 			next_id++;
 		}
 	}
@@ -1553,6 +1978,7 @@ void CompilerISPC::localize_global_variables()
 		auto &gbl_var = get<SPIRVariable>(gv_id);
 		if (gbl_var.storage == StorageClassPrivate)
 		{
+			gbl_var.storage = StorageClassFunction;
 			entry_func.add_local_variable(gv_id);
 			iter = global_variables.erase(iter);
 		}
@@ -1614,7 +2040,7 @@ void CompilerISPC::find_entry_point_args()
 					break;
 				}
 			}
-			if (var.storage == StorageClassInput && is_builtin_variable(var))
+			if (var.storage == StorageClassInput) // && is_builtin_variable(var))
 			{
 				entry_point_ids.push_back(&id);
 			}
@@ -1658,7 +2084,7 @@ string CompilerISPC::entry_point_args(bool append_comma, bool want_builtins)
 			{
 			case SPIRType::Struct:
 			{
-				string varying = varyings[var_id] ? "varying " : "uniform ";
+				string varying = meta[var_id].decoration.ispc_varying ? "varying " : "uniform ";
 				auto &m = meta.at(type.self);
 				if (m.members.size() == 0)
 					break;
@@ -1677,13 +2103,34 @@ string CompilerISPC::entry_point_args(bool append_comma, bool want_builtins)
 				break;
 			}
 		}
-		if (var.storage == StorageClassInput && is_builtin_variable(var) && want_builtins)
+		if (var.storage == StorageClassInput)
 		{
-			string varying = varyings[var_id] ? "varying " : "uniform ";
-			if (!ep_args.empty())
-				ep_args += ", ";
-			BuiltIn bi_type = meta[var_id].decoration.builtin_type;
-			ep_args += varying + type_to_glsl(type, var_id) + " " + to_expression(var_id);
+			if (is_builtin_variable(var) && want_builtins)
+			{
+				// Found a case where an unused builtin hadn't been flagged as varying because it wasn't used/processed.
+				// This should be a a catchall.
+				switch (meta[var.self].decoration.builtin_type)
+				{
+				case BuiltInLocalInvocationId:
+				case BuiltInGlobalInvocationId:
+				case BuiltInLocalInvocationIndex:
+					meta[var_id].decoration.ispc_varying = true;
+					break;
+				}
+			}
+
+			bool add_arg = true;
+			if (is_builtin_variable(var) && !want_builtins)
+				add_arg = false;
+
+			if (add_arg)
+			{
+				string varying = meta[var_id].decoration.ispc_varying ? "varying " : "uniform ";
+				if (!ep_args.empty())
+					ep_args += ", ";
+				BuiltIn bi_type = meta[var_id].decoration.builtin_type;
+				ep_args += varying + type_to_glsl(type, var_id) + " " + to_expression(var_id);
+			}
 		}
 	}
 
@@ -1733,7 +2180,8 @@ string CompilerISPC::entry_point_args_init(bool append_comma, bool want_builtins
 				break;
 			}
 		}
-		if (var.storage == StorageClassInput && is_builtin_variable(var) && want_builtins)
+		// input should get builtins and runtime arrays
+		if (var.storage == StorageClassInput) // && is_builtin_variable(var) && want_builtins)
 		{
 			if (!ep_args.empty())
 				ep_args += ", ";
@@ -1788,7 +2236,7 @@ string CompilerISPC::read_access_chain(const SPIRAccessChain &chain)
 	}
 
 	// currently have     varying float4 pos = uintBitsToFloat(oldPosVelo.Load4(DTid.x * 32 + 0));
-	// want               varying float4 pos = float4_init(oldPosVelo._data[DTid.x].pos);
+	// want               varying float4 pos = float4(oldPosVelo._data[DTid.x].pos);
 
 	//chain.base = oldPosVelo
 	//chain.dynamic_index = DTid.x * 32;
@@ -1967,8 +2415,8 @@ void CompilerISPC::codegen_default_binary_op(std::string type, uint32_t width, s
 			auto &ret_varying = (arg1 != arg2) ? varying[1] : arg1;
 
 			// scalar
-			std::string s = join("SPIRV_INLINE ", ret_varying, type, width, " operator", op, "(", arg1, type, width,
-			                     " a, ", arg2, type, " b) { ");
+			std::string s = join("static SPIRV_INLINE ", ret_varying, type, width, " operator", op, "(", arg1, type,
+			                     width, " a, ", arg2, type, " b) { ");
 			s += join(ret_varying, type, width, " ret = { ");
 			for (uint32_t ii = 0; ii < width; ii++)
 			{
@@ -1980,8 +2428,8 @@ void CompilerISPC::codegen_default_binary_op(std::string type, uint32_t width, s
 			statement(s);
 
 			// vector
-			s = join("SPIRV_INLINE ", ret_varying, type, width, " operator", op, "(", arg1, type, width, " a, ", arg2,
-			         type, width, " b) { ");
+			s = join("static SPIRV_INLINE ", ret_varying, type, width, " operator", op, "(", arg1, type, width, " a, ",
+			         arg2, type, width, " b) { ");
 			s += join(ret_varying, type, width, " ret = { ");
 			for (uint32_t ii = 0; ii < width; ii++)
 			{
@@ -2003,7 +2451,7 @@ void CompilerISPC::codegen_load_op(std::string type, uint32_t width)
 
 	for (auto &v : varying)
 	{
-		statement("SPIRV_INLINE ", v, type, width, " load", width, "(", v, type, width, " a)");
+		statement("static SPIRV_INLINE ", v, type, width, " load", width, "(", v, type, width, " a)");
 		begin_scope();
 		string args;
 		for (uint32_t ii = 0; ii < width; ii++)
@@ -2012,7 +2460,7 @@ void CompilerISPC::codegen_load_op(std::string type, uint32_t width)
 			if ((ii + 1) < width)
 				args += ", ";
 		}
-		statement("return ", type, width, "_init(", args, ");");
+		statement("return ", type, width, "(", args, ");");
 		end_scope();
 		statement("");
 	}
@@ -2024,7 +2472,7 @@ void CompilerISPC::codegen_store_op(std::string type, uint32_t width)
 	vector<string> arg_swizzles = { ".x", ".y", ".z", ".w" };
 	for (auto &v : varying)
 	{
-		statement("SPIRV_INLINE ", v, type, width, " store", width, "(", v, type, width, " a)");
+		statement("static SPIRV_INLINE ", v, type, width, " store", width, "(", v, type, width, " a)");
 		begin_scope();
 		statement(v, type, width, " ret;");
 
@@ -2137,9 +2585,47 @@ void CompilerISPC::codegen_constructor(std::string type, bool varying, uint32_t 
 				}
 			}
 		}
-		statement("SPIRV_INLINE ", v, type, width, " ", type, width, "_init(", args, " ) { ", v, type, width,
+		statement("static SPIRV_INLINE ", v, type, width, " ", type, width, "_init(", args, " ) { ", v, type, width,
 		          " ret = { ", init, " }; return ret; }");
 	}
+}
+
+void CompilerISPC::codegen_cast_constructor(std::string src_type, std::string dst_type, bool varying, uint32_t width)
+{
+	std::vector<string> arg_swizzles = { ".x", ".y", ".z", ".w" };
+
+	std::vector<string> vector_names = { "varying ", "uniform " };
+	std::string v = vector_names[varying ? 0 : 1];
+
+	// Create signature
+	string args = "";
+	args += v;
+
+	args += join("const ", src_type); // varying const float
+	if (width > 1)
+	{
+		args += join(width); // varying const float2
+		args += "&"; // varying const float2&
+	}
+	args += join(" a"); // varying const float2& a
+
+	// Create list initialiser
+	string init;
+	uint32_t required_initialisers = 0;
+	while (required_initialisers < width)
+	{
+		for (uint32_t aw = 0; aw < width; aw++)
+		{
+			required_initialisers++;
+			init += join(" (", v, dst_type, ")a");
+			if (width > 1)
+				init += arg_swizzles[aw];
+			if (required_initialisers < width)
+				init += ", ";
+		}
+	}
+	statement("static SPIRV_INLINE ", v, dst_type, width, " ", dst_type, width, "_init(", args, " ) { ", v, dst_type,
+	          width, " ret = { ", init, " }; return ret; }");
 }
 
 // varyings/vector widths are : return, arg1, arg2, arg3
@@ -2157,7 +2643,7 @@ void CompilerISPC::codegen_ternary_float_op_multiple_widths(
 		for (auto &v : varyings)
 		{
 			// pass by ref if non POD
-			std::string op = join("SPIRV_INLINE ", v[0], " float");
+			std::string op = join("static SPIRV_INLINE ", v[0], " float");
 			if (w[0] > 1)
 				op += join(w[0]);
 			op += join(" ", func_name, "(", v[1], " float");
@@ -2194,11 +2680,11 @@ void CompilerISPC::codegen_ternary_float_op(
 		for (auto &v : varyings)
 		{
 			if (w == 1)
-				statement("SPIRV_INLINE ", v[0], " float ", func_name, "(", v[1], " float a, ", v[2], " float b, ",
-				          v[3], " float c)");
+				statement("static SPIRV_INLINE ", v[0], " float ", func_name, "(", v[1], " float a, ", v[2],
+				          " float b, ", v[3], " float c)");
 			else
-				statement("SPIRV_INLINE ", v[0], " float", w, " ", func_name, "(", v[1], " float", w, "& a, ", v[2],
-				          " float", w, "& b, ", v[3], " float", w, "& c)");
+				statement("static SPIRV_INLINE ", v[0], " float", w, " ", func_name, "(", v[1], " float", w, "& a, ",
+				          v[2], " float", w, "& b, ", v[3], " float", w, "& c)");
 
 			begin_scope();
 			func(v, w);
@@ -2245,11 +2731,11 @@ void CompilerISPC::codegen_ternary_float_op_scalar_return(
 		for (auto &v : varyings)
 		{
 			if (w == 1)
-				statement("SPIRV_INLINE ", v[0], " float ", func_name, "(", v[1], " float a, ", v[2], " float b, ",
-				          v[3], " float c)");
+				statement("static SPIRV_INLINE ", v[0], " float ", func_name, "(", v[1], " float a, ", v[2],
+				          " float b, ", v[3], " float c)");
 			else
-				statement("SPIRV_INLINE ", v[0], " float ", func_name, "(", v[1], " float", w, "& a, ", v[2], " float",
-				          w, "& b, ", v[3], " float", w, "& c)");
+				statement("static SPIRV_INLINE ", v[0], " float ", func_name, "(", v[1], " float", w, "& a, ", v[2],
+				          " float", w, "& b, ", v[3], " float", w, "& c)");
 
 			begin_scope();
 			func(v, w);
@@ -2273,10 +2759,11 @@ void CompilerISPC::codegen_binary_float_op(
 		for (auto &v : varyings)
 		{
 			if (w == 1)
-				statement("SPIRV_INLINE ", v[0], " float ", func_name, "(", v[1], " float a, ", v[2], " float b)");
+				statement("static SPIRV_INLINE ", v[0], " float ", func_name, "(", v[1], " float a, ", v[2],
+				          " float b)");
 			else
-				statement("SPIRV_INLINE ", v[0], " float", w, " ", func_name, "(", v[1], " float", w, "& a, ", v[2],
-				          " float", w, "& b)");
+				statement("static SPIRV_INLINE ", v[0], " float", w, " ", func_name, "(", v[1], " float", w, "& a, ",
+				          v[2], " float", w, "& b)");
 
 			begin_scope();
 			func(v, w);
@@ -2322,10 +2809,11 @@ void CompilerISPC::codegen_binary_float_op_scalar_return(
 		for (auto &v : varyings)
 		{
 			if (w == 1)
-				statement("SPIRV_INLINE ", v[0], " float ", func_name, "(", v[1], " float a, ", v[2], " float b)");
+				statement("static SPIRV_INLINE ", v[0], " float ", func_name, "(", v[1], " float a, ", v[2],
+				          " float b)");
 			else
-				statement("SPIRV_INLINE ", v[0], " float ", func_name, "(", v[1], " float", w, "& a, ", v[2], " float",
-				          w, "& b)");
+				statement("static SPIRV_INLINE ", v[0], " float ", func_name, "(", v[1], " float", w, "& a, ", v[2],
+				          " float", w, "& b)");
 
 			begin_scope();
 			func(v, w);
@@ -2349,9 +2837,9 @@ void CompilerISPC::codegen_unary_float_op(
 		for (auto &v : varyings)
 		{
 			if (w == 1)
-				statement("SPIRV_INLINE ", v[0], " float ", func_name, "(", v[1], " float a)");
+				statement("static SPIRV_INLINE ", v[0], " float ", func_name, "(", v[1], " float a)");
 			else
-				statement("SPIRV_INLINE ", v[0], " float", w, " ", func_name, "(", v[1], " float", w, "& a)");
+				statement("static SPIRV_INLINE ", v[0], " float", w, " ", func_name, "(", v[1], " float", w, "& a)");
 
 			begin_scope();
 			func(v, w);
@@ -2375,9 +2863,9 @@ void CompilerISPC::codegen_unary_float_op_scalar_return(
 		for (auto &v : varyings)
 		{
 			if (w == 1)
-				statement("SPIRV_INLINE ", v[0], " float ", func_name, "(", v[1], " float a)");
+				statement("static SPIRV_INLINE ", v[0], " float ", func_name, "(", v[1], " float a)");
 			else
-				statement("SPIRV_INLINE ", v[0], " float ", func_name, "(", v[1], " float", w, "& a)");
+				statement("static SPIRV_INLINE ", v[0], " float ", func_name, "(", v[1], " float", w, "& a)");
 
 			begin_scope();
 			func(v, w);
@@ -2422,9 +2910,9 @@ void CompilerISPC::codegen_unary_float_op_scalar_bool_return(
 		for (auto &v : varyings)
 		{
 			if (w == 1)
-				statement("SPIRV_INLINE ", v[0], " bool ", func_name, "(", v[1], " float a)");
+				statement("static SPIRV_INLINE ", v[0], " bool ", func_name, "(", v[1], " float a)");
 			else
-				statement("SPIRV_INLINE ", v[0], " bool ", func_name, "(", v[1], " float", w, "& a)");
+				statement("static SPIRV_INLINE ", v[0], " bool ", func_name, "(", v[1], " float", w, "& a)");
 
 			begin_scope();
 			func(v, w);
@@ -2448,9 +2936,9 @@ void CompilerISPC::codegen_unary_float_op_int_return(
 		for (auto &v : varyings)
 		{
 			if (w == 1)
-				statement("SPIRV_INLINE ", v[0], " int ", func_name, "(", v[1], " float a)");
+				statement("static SPIRV_INLINE ", v[0], " int ", func_name, "(", v[1], " float a)");
 			else
-				statement("SPIRV_INLINE ", v[0], " int", w, " ", func_name, "(", v[1], " float", w, "& a)");
+				statement("static SPIRV_INLINE ", v[0], " int", w, " ", func_name, "(", v[1], " float", w, "& a)");
 
 			begin_scope();
 			func(v, w);
@@ -2476,9 +2964,10 @@ void CompilerISPC::codegen_unary_op_scalar_return(
 		for (auto &v : varyings)
 		{
 			if (w == 1)
-				statement("SPIRV_INLINE ", v[0], " ", types[0], " ", func_name, "(", v[1], " ", types[1], " a)");
+				statement("static SPIRV_INLINE ", v[0], " ", types[0], " ", func_name, "(", v[1], " ", types[1], " a)");
 			else
-				statement("SPIRV_INLINE ", v[0], " ", types[0], " ", func_name, "(", v[1], " ", types[1], w, "& a)");
+				statement("static SPIRV_INLINE ", v[0], " ", types[0], " ", func_name, "(", v[1], " ", types[1], w,
+				          "& a)");
 
 			begin_scope();
 			func(v, types, w);
@@ -2504,11 +2993,11 @@ void CompilerISPC::codegen_binary_op_scalar_return(
 		for (auto &v : varyings)
 		{
 			if (w == 1)
-				statement("SPIRV_INLINE ", v[0], " ", types[0], " ", func_name, "(", v[1], " ", types[1], " a, ", v[2],
-				          " ", types[2], " b)");
+				statement("static SPIRV_INLINE ", v[0], " ", types[0], " ", func_name, "(", v[1], " ", types[1], " a, ",
+				          v[2], " ", types[2], " b)");
 			else
-				statement("SPIRV_INLINE ", v[0], " ", types[0], " ", func_name, "(", v[1], " ", types[1], w, "& a, ",
-				          v[2], " ", types[2], w, "& b)");
+				statement("static SPIRV_INLINE ", v[0], " ", types[0], " ", func_name, "(", v[1], " ", types[1], w,
+				          "& a, ", v[2], " ", types[2], w, "& b)");
 
 			begin_scope();
 			func(v, types, w);
@@ -2533,11 +3022,11 @@ void CompilerISPC::codegen_binary_op(
 		for (auto &v : varyings)
 		{
 			if (w == 1)
-				statement("SPIRV_INLINE ", v[0], " ", types[0], " ", func_name, "(", v[1], " ", types[1], " a, ", v[2],
-				          " ", types[2], " b)");
+				statement("static SPIRV_INLINE ", v[0], " ", types[0], " ", func_name, "(", v[1], " ", types[1], " a, ",
+				          v[2], " ", types[2], " b)");
 			else
-				statement("SPIRV_INLINE ", v[0], " ", types[0], w, " ", func_name, "(", v[1], " ", types[1], w, "& a, ",
-				          v[2], " ", types[2], w, "& b)");
+				statement("static SPIRV_INLINE ", v[0], " ", types[0], w, " ", func_name, "(", v[1], " ", types[1], w,
+				          "& a, ", v[2], " ", types[2], w, "& b)");
 
 			begin_scope();
 			func(v, types, w);
@@ -2593,7 +3082,7 @@ void CompilerISPC::emit_stdlib()
 		{
 			for (const uint32_t &w : std::vector<uint32_t>{ 1, 2, 3, 4 })
 			{
-				std::string op = join("inline varying ", t);
+				std::string op = join("static SPIRV_INLINE varying ", t);
 				if (w > 1)
 					op += join(w);
 				op += join(" to_varying(");
@@ -2605,6 +3094,27 @@ void CompilerISPC::emit_stdlib()
 					op += join(w);
 				op += ")a; }";
 				statement(op);
+			}
+		}
+	}
+	statement("");
+
+	statement("//////////////////////////////");
+	statement("// Default Simple Casts That Honour Varying/Uniforms");
+	statement("//////////////////////////////");
+	for (const string &t : std::vector<string>{ "float", "int" }) //"bool" There seems to be an issue with bools
+	{
+		for (const string &v : std::vector<string>{ "uniform", "varying" })
+		{
+			for (const string &t2 :
+			     std::vector<string>{ "float", "int" }) //"bool" There seems to be an issue with bools
+			{
+				std::string op1 = join("static SPIRV_INLINE const ", v, " ", t, " ", t, "_cast(const ", v, " ", t2,
+				                       "& a) { return (const ", v, " ", t, ") a; }");
+				std::string op2 = join("static SPIRV_INLINE ", v, " ", t, " ", t, "_cast(", v, " ", t2,
+				                       "& a) { return (", v, " ", t, ") a; }");
+				statement(op1);
+				statement(op2);
 			}
 		}
 	}
@@ -2638,9 +3148,19 @@ void CompilerISPC::emit_stdlib()
 				{
 					codegen_constructor(t, v, w, w - 2, arg_widths[3]);
 				}
+
+				// Allow for : float2(int2 a)
+				if (t == "float")
+					codegen_cast_constructor("int", t, v, w);
+				else if (t == "int")
+					codegen_cast_constructor("float", t, v, w);
 			}
 			statement("");
 		}
+
+		for (const uint32_t &w : std::vector<uint32_t>{ 2, 3, 4 })
+			statement("#define ", t, w, "(...) ", t, w, "_init(__VA_ARGS__)");
+		statement("");
 	}
 
 	statement("");
@@ -2671,9 +3191,8 @@ void CompilerISPC::emit_stdlib()
 			{ "uniform", "uniform", "uniform", "uniform" },
 		};
 		vector<vector<string>> complex_varying = {
-			{ "varying", "varying", "varying", "varying" },
-			{ "varying", "uniform", "varying", "varying" },
-			{ "varying", "varying", "uniform", "varying" },
+			{ "varying", "varying", "varying", "varying" }, { "varying", "uniform", "varying", "varying" },
+			{ "varying", "varying", "uniform", "varying" }, { "varying", "varying", "varying", "uniform" },
 			{ "uniform", "uniform", "uniform", "uniform" },
 		};
 		vector<vector<string>> mixed_varying = {
@@ -3009,7 +3528,7 @@ void CompilerISPC::emit_stdlib()
 			                  "atomic_and", "atomic_or",       "atomic_xor", "atomic_swap" };
 		for (auto &o : op)
 		{
-			statement("SPIRV_INLINE varying int ", o, "(uniform int * uniform ptr, varying int value)");
+			statement("static SPIRV_INLINE varying int ", o, "(uniform int * uniform ptr, varying int value)");
 			begin_scope();
 			statement("uniform int ret[programCount];");
 			statement("foreach_active(instance)");
@@ -3022,12 +3541,40 @@ void CompilerISPC::emit_stdlib()
 			end_scope();
 			statement("");
 
-			statement("SPIRV_INLINE varying int ", o, "(uniform int * uniform ptr, uniform int value)");
+			statement("static SPIRV_INLINE varying int ", o, "(uniform int * uniform ptr, uniform int value)");
 			begin_scope();
 			statement("uniform int ret[programCount];");
 			statement("foreach_active(instance)");
 			begin_scope();
 			statement("ret[instance] = ", o, "_global(ptr, value);");
+			end_scope();
+			statement("varying int vRet = *((varying int * uniform) &ret);");
+			statement("return vRet;");
+			end_scope();
+			statement("");
+
+			statement("static SPIRV_INLINE varying int ", o, "(uniform int * varying vptr, varying int value)");
+			begin_scope();
+			statement("uniform int ret[programCount];");
+			statement("uniform int ** uniform ptr = ((uniform int ** uniform) &vptr);");
+
+			statement("foreach_active(instance)");
+			begin_scope();
+			statement("uniform int val = extract(value, instance);");
+			statement("ret[instance] = ", o, "_global(ptr[instance], val);");
+			end_scope();
+			statement("varying int vRet = *((varying int * uniform) &ret);");
+			statement("return vRet;");
+			end_scope();
+			statement("");
+
+			statement("static SPIRV_INLINE varying int ", o, "(uniform int * varying vptr, uniform int value)");
+			begin_scope();
+			statement("uniform int ret[programCount];");
+			statement("uniform int ** uniform ptr = ((uniform int ** uniform) &vptr);");
+			statement("foreach_active(instance)");
+			begin_scope();
+			statement("ret[instance] = ", o, "_global(ptr[instance], value);");
 			end_scope();
 			statement("varying int vRet = *((varying int * uniform) &ret);");
 			statement("return vRet;");
@@ -3041,12 +3588,12 @@ void CompilerISPC::emit_stdlib()
 	{
 		statement("");
 		statement("//////////////////////////////");
-		statement("// Image Load/Store");
+		statement("// Image Load/Store/Size");
 		statement("//////////////////////////////");
-		statement("const varying float r_255 = 1.0 / 255.0;");
 		statement("");
-		statement("SPIRV_INLINE varying float4 imageLoad(uniform image2D &image, varying int2 coord)");
+		statement("static SPIRV_INLINE varying float4 imageLoad(uniform image2D &image, varying int2 coord)");
 		begin_scope();
+		statement("const varying float r_255 = 1.0 / 255.0;");
 		statement("varying float4 res = float4_init(0.0);");
 		statement("if (coord.x >= image.width || coord.y >= image.height)");
 		statement("    return res;");
@@ -3061,17 +3608,27 @@ void CompilerISPC::emit_stdlib()
 		statement("");
 
 		statement("");
-		statement("SPIRV_INLINE void imageStore(uniform image2D &image, varying int2 coord, varying float4 rgba)");
+		statement(
+		    "static SPIRV_INLINE void imageStore(uniform image2D &image, varying int2 coord, varying float4 rgba)");
 		begin_scope();
 		statement("if (coord.x >= image.width || coord.y >= image.height)");
 		statement("    return;");
+		statement("varying float4 clamped_rgba = clamp(rgba, float4(0.0f), float4(1.0f));");
 		statement("varying unsigned int index = coord.y * image.width + coord.x;");
 		statement("varying pixel4D pix;");
-		statement("pix.r = (unsigned int8)(rgba.x * 255);");
-		statement("pix.g = (unsigned int8)(rgba.y * 255);");
-		statement("pix.b = (unsigned int8)(rgba.z * 255);");
-		statement("pix.a = (unsigned int8)(rgba.w * 255);");
+		statement("pix.r = (unsigned int8)(clamped_rgba.x * 255);");
+		statement("pix.g = (unsigned int8)(clamped_rgba.y * 255);");
+		statement("pix.b = (unsigned int8)(clamped_rgba.z * 255);");
+		statement("pix.a = (unsigned int8)(clamped_rgba.w * 255);");
 		statement("image.data[index] = pix;");
+		end_scope();
+		statement("");
+
+		statement("");
+		statement("static SPIRV_INLINE uniform int2 imageSize(uniform image2D &image)");
+		begin_scope();
+		statement("uniform int2 ret = { image.width, image.height };");
+		statement("return ret;");
 		end_scope();
 		statement("");
 	}

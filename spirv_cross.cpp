@@ -27,7 +27,7 @@ using namespace spirv_cross;
 
 #define log(...) fprintf(stderr, __VA_ARGS__)
 
-static string ensure_valid_identifier(const string &name, bool member)
+string ensure_valid_identifier(const string &name, bool member)
 {
 	// Functions in glslangValidator are mangled with name(<mangled> stuff.
 	// Normally, we would never see '(' in any legal identifiers, so just strip them out.
@@ -2221,6 +2221,8 @@ bool Compiler::traverse_all_reachable_opcodes(const SPIRBlock &block, OpcodeHand
 
 bool Compiler::traverse_all_reachable_opcodes(const SPIRFunction &func, OpcodeHandler &handler) const
 {
+	handler.set_current_function(func);
+
 	for (auto block : func.blocks)
 		if (!traverse_all_reachable_opcodes(get<SPIRBlock>(block), handler))
 			return false;

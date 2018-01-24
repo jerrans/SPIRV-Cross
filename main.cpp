@@ -474,6 +474,7 @@ struct CLIArguments
 	bool fixup = false;
 	bool yflip = false;
 	bool sso = false;
+	bool ispc_ignore_runtimearray_padding = false;
 	vector<PLSArg> pls_in;
 	vector<PLSArg> pls_out;
 	vector<Remap> remaps;
@@ -506,7 +507,7 @@ static void print_help()
 	                "[--cpp] [--cpp-interface-name <name>] "
 	                "[--msl] [--msl-version <MMmmpp>]"
 	                "[--hlsl] [--shader-model] [--hlsl-enable-compat] "
-	                "[--ispc] [--ispc-interface-name]"
+	                "[--ispc] [--ispc-interface-name] [--ispc-ignore-runtimearray-padding"
 	                "[--separate-shader-objects]"
 	                "[--pls-in format input-name] [--pls-out format output-name] [--remap source_name target_name "
 	                "components] [--extension ext] [--entry name] [--remove-unused-variables] "
@@ -669,6 +670,8 @@ static int main_inner(int argc, char *argv[])
 	});
 	cbs.add("--ispc-debug", [&args](CLIParser &) { args.ispc_debug = true; });
 	cbs.add("--ispc-interface-name", [&args](CLIParser &parser) { args.ispc_interface_name = parser.next_string(); });
+	cbs.add("--ispc-ignore-runtimearray-padding",
+	        [&args](CLIParser &parser) { args.ispc_ignore_runtimearray_padding = true; });
 	cbs.add("--vulkan-semantics", [&args](CLIParser &) { args.vulkan_semantics = true; });
 	cbs.add("--flatten-multidimensional-arrays", [&args](CLIParser &) { args.flatten_multidimensional_arrays = true; });
 	cbs.add("--no-420pack-extension", [&args](CLIParser &) { args.use_420pack_extension = false; });
@@ -797,6 +800,8 @@ static int main_inner(int argc, char *argv[])
 		}
 		if (args.ispc_debug)
 			static_cast<CompilerISPC *>(compiler.get())->set_debug();
+		if (args.ispc_ignore_runtimearray_padding)
+			static_cast<CompilerISPC *>(compiler.get())->set_ignore_runtimearray_padding();
 	}
 	else
 	{
@@ -965,7 +970,6 @@ static int main_inner(int argc, char *argv[])
 	{
 		printf("%s", glsl.c_str());
 	}
-
 	return EXIT_SUCCESS;
 }
 

@@ -612,6 +612,10 @@ protected:
 		{
 		}
 
+		virtual void set_current_function(const SPIRFunction &)
+		{
+		}
+
 		virtual bool begin_function_scope(const uint32_t *, uint32_t)
 		{
 			return true;

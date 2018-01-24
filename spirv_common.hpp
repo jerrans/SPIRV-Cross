@@ -609,6 +609,15 @@ struct SPIRFunction : IVariant
 		arguments.push_back({ parameter_type, id, 0u, 0u, alias_global_variable });
 	}
 
+	void clear_aliased_global_variable_parameters()
+	{
+		// May need to remove global aliases if re-adding them
+		while (!arguments.empty() && arguments.back().alias_global_variable)
+		{
+			arguments.pop_back();
+		}
+	}
+
 	bool active = false;
 	bool flush_undeclared = true;
 	bool do_combined_parameters = true;
@@ -984,6 +993,8 @@ struct Meta
 		uint32_t spec_id = 0;
 		bool builtin = false;
 		uint32_t runtime_array_padding = 0; // does a member struct require padding for a run time array
+		uint32_t runtime_array_length_id = 0; // ID of the new input runtime array length variable
+		bool ispc_varying = false; // True if this variable should be vectorised
 	};
 
 	Decoration decoration;

@@ -914,6 +914,7 @@ void CompilerHLSL::emit_resources()
 
 			if (var.storage != StorageClassFunction && type.pointer && is_block_storage && !is_hidden_variable(var) &&
 			    has_block_flags)
+
 			{
 				emit_buffer_block(var);
 				emitted = true;
