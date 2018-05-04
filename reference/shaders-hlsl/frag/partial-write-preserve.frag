@@ -4,14 +4,9 @@ struct B
     float b;
 };
 
-struct _UBO
+cbuffer _42 : register(b0)
 {
-    int some_value;
-};
-
-cbuffer UBO : register(c0)
-{
-    _UBO _42;
+    int _42_some_value : packoffset(c0);
 };
 
 void partial_inout(inout float4 x)
@@ -21,27 +16,27 @@ void partial_inout(inout float4 x)
 
 void complete_inout(out float4 x)
 {
-    x = float4(50.0f, 50.0f, 50.0f, 50.0f);
+    x = 50.0f.xxxx;
 }
 
 void branchy_inout(inout float4 v)
 {
     v.y = 20.0f;
-    if (_42.some_value == 20)
+    if (_42_some_value == 20)
     {
-        v = float4(50.0f, 50.0f, 50.0f, 50.0f);
+        v = 50.0f.xxxx;
     }
 }
 
 void branchy_inout_2(out float4 v)
 {
-    if (_42.some_value == 20)
+    if (_42_some_value == 20)
     {
-        v = float4(50.0f, 50.0f, 50.0f, 50.0f);
+        v = 50.0f.xxxx;
     }
     else
     {
-        v = float4(70.0f, 70.0f, 70.0f, 70.0f);
+        v = 70.0f.xxxx;
     }
     v.y = 20.0f;
 }
@@ -53,7 +48,7 @@ void partial_inout(inout B b)
 
 void frag_main()
 {
-    float4 a = float4(10.0f, 10.0f, 10.0f, 10.0f);
+    float4 a = 10.0f.xxxx;
     float4 param = a;
     partial_inout(param);
     a = param;
