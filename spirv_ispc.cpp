@@ -3595,7 +3595,7 @@ void CompilerISPC::emit_stdlib()
 		begin_scope();
 		statement("const varying float r_255 = 1.0 / 255.0;");
 		statement("varying float4 res = float4_init(0.0);");
-		statement("if (coord.x >= image.width || coord.y >= image.height)");
+		statement("if (coord.x >= image.width || coord.y >= image.height || coord.x < 0 || coord.y < 0)");
 		statement("    return res;");
 		statement("varying unsigned int index = coord.y * image.width + coord.x;");
 		statement("varying pixel4D pix = image.data[index];");
@@ -3611,8 +3611,8 @@ void CompilerISPC::emit_stdlib()
 		statement(
 		    "static SPIRV_INLINE void imageStore(uniform image2D &image, varying int2 coord, varying float4 rgba)");
 		begin_scope();
-		statement("if (coord.x >= image.width || coord.y >= image.height)");
-		statement("    return;");
+        statement("if (coord.x >= image.width || coord.y >= image.height || coord.x < 0 || coord.y < 0)");
+        statement("    return;");
 		statement("varying float4 clamped_rgba = clamp(rgba, float4(0.0f), float4(1.0f));");
 		statement("varying unsigned int index = coord.y * image.width + coord.x;");
 		statement("varying pixel4D pix;");
