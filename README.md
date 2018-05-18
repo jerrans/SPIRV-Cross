@@ -1,12 +1,52 @@
-# SPIRV-Cross
+# SPIRV-Cross (ISPC)
 
 SPIRV-Cross is a tool designed for parsing and converting SPIR-V to other shader languages.
 
-Intel modifications are to add ISPC output support, primarily for SPIRV compute shaders from HLSL/GLSL. This is very much a WIP project.
+## SPIRV to ISPC Support
 
-[![Build Status](https://travis-ci.org/KhronosGroup/SPIRV-Cross.svg?branch=master)](https://travis-ci.org/KhronosGroup/SPIRV-Cross)
+Intel modifications are to add ISPC kernel output support, primarily for SPIRV compute shaders from HLSL/GLSL. This is very much a WIP project.
 
-## Features
+
+
+### SPIRV to ISPC Features
+
+* Simple dispatch API to vectorise over local work group range.
+
+* Resources supported through ISPC function arguments.
+
+  * Including struct padding allowing for GPU/CPU interop 
+
+* Uniform/varying variable tracking based on SPIRV vector builtins and functions.
+
+* Emits a stdlib ISPC kernel supporting many SPIRV functions and easily extendable via codegen
+
+* Supports vector types float2-4, int2-4, bool 2-4
+
+* Basic support for RGBA8 images
+
+* Atomic support
+
+* Built and tested on Windows only
+
+  
+
+### SPIRV to ISPC Missing Features
+
+* No matrix support
+
+* No texture support
+
+* No shared memory support or barrier support
+
+* Limited builtin function support
+
+* No runtime modifications of specialization constants
+
+* Not built or tested on Linux/MacOS
+
+  
+
+## SPIRV-Cross Features
 
   - Convert SPIR-V to readable, usable and efficient GLSL
   - Convert SPIR-V to readable, usable and efficient Metal Shading Language (MSL) [EXPERIMENTAL]
