@@ -82,9 +82,9 @@ void CompilerISPC::emit_interface_block(const SPIRVariable &var)
 	else
 		buffer_name = type_to_glsl(type);
 
-//	statement("internal::", qual, "<", buffer_name, type_to_array_glsl(type), "> ", instance_name, "__;");
-//	statement_no_indent("#define ", instance_name, " __res->", instance_name, "__.get()");
-//	statement("");
+	//	statement("internal::", qual, "<", buffer_name, type_to_array_glsl(type), "> ", instance_name, "__;");
+	//	statement_no_indent("#define ", instance_name, " __res->", instance_name, "__.get()");
+	//	statement("");
 }
 
 void CompilerISPC::emit_shared(const SPIRVariable &var)
@@ -92,8 +92,8 @@ void CompilerISPC::emit_shared(const SPIRVariable &var)
 	add_resource_name(var.self);
 
 	auto instance_name = to_name(var.self);
-//	statement(CompilerGLSL::variable_decl(var), ";");
-//	statement_no_indent("#define ", instance_name, " __res->", instance_name);
+	//	statement(CompilerGLSL::variable_decl(var), ";");
+	//	statement_no_indent("#define ", instance_name, " __res->", instance_name);
 }
 
 void CompilerISPC::emit_uniform(const SPIRVariable &var)
@@ -112,7 +112,7 @@ void CompilerISPC::emit_uniform(const SPIRVariable &var)
 
 	if (type.basetype == SPIRType::AtomicCounter)
 	{
-        //		statement("internal::Resource<", type_name, type_to_array_glsl(type), "> ", instance_name, "__;");
+		//		statement("internal::Resource<", type_name, type_to_array_glsl(type), "> ", instance_name, "__;");
 		//		statement_no_indent("#define ", instance_name, " __res->", instance_name, "__.get()");
 		//		    join("s.register_resource(", instance_name, "__", ", ", descriptor_set, ", ", binding, ");"));
 	}
@@ -188,11 +188,11 @@ void CompilerISPC::emit_struct(SPIRType &type)
 			// if we are a runtime array that is a struct, we may need padding to conform to GLSL rules
 			if (!membertype.array.empty() && !membertype.array.back() && membertype.basetype == SPIRType::Struct)
 			{
-                // array_size comes from SPIRV, but this may be different to the actual size
-                // of the member struct elements that have been declared.
-                // ie. a struct may be rounded up to the nearest vec4 size, depending on the padding rules.
-                // This is generally only an issue for runtime arrays which require the correct padding so ISPC
-                // can iterate through the array correctly.
+				// array_size comes from SPIRV, but this may be different to the actual size
+				// of the member struct elements that have been declared.
+				// ie. a struct may be rounded up to the nearest vec4 size, depending on the padding rules.
+				// This is generally only an issue for runtime arrays which require the correct padding so ISPC
+				// can iterate through the array correctly.
 				auto array_size = get_declared_struct_size(type);
 				auto member_size = get_declared_struct_size(membertype);
 				auto padding_size = array_size - member_size;
@@ -203,8 +203,8 @@ void CompilerISPC::emit_struct(SPIRType &type)
 					if (membertype.type_alias)
 						meta[membertype.type_alias].decoration.runtime_array_padding = padding_size;
 
-                    // The membertype may have already been written out, so we need to recompile it with the correct padding.
-                    // The padding meta data will persist through a re-compile.
+					// The membertype may have already been written out, so we need to recompile it with the correct padding.
+					// The padding meta data will persist through a re-compile.
 					force_recompile = true;
 				}
 			}
@@ -244,7 +244,7 @@ void CompilerISPC::emit_specialization_constants()
 			auto &type = get<SPIRType>(c.constant_type);
 			auto name = to_name(c.self);
 
-            // Don't support changing specialization constants at runtime, but do support them as #defines.
+			// Don't support changing specialization constants at runtime, but do support them as #defines.
 			statement("#define ", name, " ", constant_expression(c));
 			//            statement("const ", variable_decl(type, name, 0), " = ", constant_expression(c), ";");
 			emitted = true;
@@ -454,7 +454,6 @@ string CompilerISPC::compile()
 
 	return buffer->str();
 }
-
 
 void CompilerISPC::emit_ispc_main()
 {
@@ -749,12 +748,12 @@ void CompilerISPC::emit_header()
 
 	switch (execution.model)
 	{
-//	case ExecutionModelGeometry:
-//	case ExecutionModelTessellationControl:
-//	case ExecutionModelTessellationEvaluation:
+		//	case ExecutionModelGeometry:
+		//	case ExecutionModelTessellationControl:
+		//	case ExecutionModelTessellationEvaluation:
 	case ExecutionModelGLCompute:
-//	case ExecutionModelFragment:
-//	case ExecutionModelVertex:
+		//	case ExecutionModelFragment:
+		//	case ExecutionModelVertex:
 		//		statement("struct Shader");
 		//		begin_scope();
 		break;
@@ -884,7 +883,7 @@ string CompilerISPC::type_to_glsl(const SPIRType &type, uint32_t id)
 		}
 		else
 		{
-            // Shouldn't be using short vectors due to padding issues. Should remove.
+			// Shouldn't be using short vectors due to padding issues. Should remove.
 			switch (type.basetype)
 			{
 			case SPIRType::Boolean:
@@ -908,7 +907,7 @@ string CompilerISPC::type_to_glsl(const SPIRType &type, uint32_t id)
 	}
 	else if (type.vecsize == type.columns) // Simple Matrix builtin
 	{
-        // Not fully supported yet. Will need stdlib implementations.
+		// Not fully supported yet. Will need stdlib implementations.
 		switch (type.basetype)
 		{
 		case SPIRType::Boolean:
@@ -928,8 +927,8 @@ string CompilerISPC::type_to_glsl(const SPIRType &type, uint32_t id)
 	}
 	else
 	{
-        // Not fully supported yet. Will need stdlib implementations.
-        switch (type.basetype)
+		// Not fully supported yet. Will need stdlib implementations.
+		switch (type.basetype)
 		{
 		case SPIRType::Boolean:
 			return join("bmat", type.columns, "x", type.vecsize);
@@ -1365,32 +1364,32 @@ bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *
 
 		auto *var = compiler.maybe_get<SPIRVariable>(args[0]);
 
-        // Ignore loop variables as they should always be uniform
+		// Ignore loop variables as they should always be uniform
 		if (var && !var->loop_variable)
 		{
-            //
+			//
 			// If the variable has scope outside of the blocks contained within the current conditional,
 			// add it as a dependancy on the current conditional.
 			// Walk the stack of conditionals if true.
-            // ie.
-            // float a = 0.0;
-            // if (b)
-            //    a = 1.0;
-            //
-            // if b is a varying conditional, then a also needs to be a varying variable
-            //
+			// ie.
+			// float a = 0.0;
+			// if (b)
+			//    a = 1.0;
+			//
+			// if b is a varying conditional, then a also needs to be a varying variable
+			//
 			unordered_set<uint32_t> visited_blocks;
-            
-            // The stack of nested conditional blocks is updated by the handler whenever a new conditional block is entered.
-            // It therefore contains a stack of dependant conditional blocks that all depend on each other, so if a
-            // high level conditional block is a varying, then all of its child conditional blocks will also be varyings.
-            //
-            // If a store occurs within a (possibly nested) conditional block, then the variable should depend on the conditional.
-            // The exceptions are :
-            //   * If the conditional block is in a different function
-            //   * If store is within the conditionals this_block (which means the condition hasn't been branched yet)
-            //   * If the variable is declared within the scope of the current conditional, then it shouldn't depend on
-            //       the conditional as its not enough information to determine if it is a varying/uniform.
+
+			// The stack of nested conditional blocks is updated by the handler whenever a new conditional block is entered.
+			// It therefore contains a stack of dependant conditional blocks that all depend on each other, so if a
+			// high level conditional block is a varying, then all of its child conditional blocks will also be varyings.
+			//
+			// If a store occurs within a (possibly nested) conditional block, then the variable should depend on the conditional.
+			// The exceptions are :
+			//   * If the conditional block is in a different function
+			//   * If store is within the conditionals this_block (which means the condition hasn't been branched yet)
+			//   * If the variable is declared within the scope of the current conditional, then it shouldn't depend on
+			//       the conditional as its not enough information to determine if it is a varying/uniform.
 			for (auto conditional : condition_block_stack)
 			{
 				bool depend_on_condition = true;
@@ -1400,7 +1399,7 @@ bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *
 					depend_on_condition = false;
 				else
 				{
-                    // Use the control flow graph that the handler generates per function.
+					// Use the control flow graph that the handler generates per function.
 					visited_blocks.clear();
 					cfg_stack.top()->walk_from(visited_blocks, current_block->self, [&](uint32_t walk_block) {
 						if (walk_block == conditional->this_block)
@@ -1418,7 +1417,7 @@ bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *
 						}
 					});
 				}
-                // Add the dependancy to the conditional
+				// Add the dependancy to the conditional
 				if (depend_on_condition)
 				{
 					add_dependancies(args[0], conditional->condition);
@@ -1512,7 +1511,7 @@ bool CompilerISPC::VectorisationHandler::begin_function_scope(const uint32_t *, 
 
 bool CompilerISPC::VectorisationHandler::end_function_scope(const uint32_t *, uint32_t)
 {
-    // Pop the stack
+	// Pop the stack
 	CFG *cfg = cfg_stack.top();
 	if (cfg)
 		delete cfg;
@@ -1527,8 +1526,8 @@ void CompilerISPC::VectorisationHandler::set_current_block(const SPIRBlock &bloc
 {
 	current_block = &block;
 
-    // Add a new block to the conditional block tracker. This is required for the correct dependancy tracking
-    // of stores to dependancy blocks.
+	// Add a new block to the conditional block tracker. This is required for the correct dependancy tracking
+	// of stores to dependancy blocks.
 	if (current_block->condition)
 	{
 		conditional_block_tracker *cbt = new conditional_block_tracker;
@@ -1549,7 +1548,7 @@ void CompilerISPC::VectorisationHandler::set_current_block(const SPIRBlock &bloc
 	}
 	else
 	{
-        // Need to work out when we have left the conditional block so we can pop the cbt from the stack
+		// Need to work out when we have left the conditional block so we can pop the cbt from the stack
 		while (!condition_block_stack.empty())
 		{
 			conditional_block_tracker *cbt = condition_block_stack.back();
@@ -3605,8 +3604,8 @@ void CompilerISPC::emit_stdlib()
 		statement(
 		    "static SPIRV_INLINE void imageStore(uniform image2D &image, varying int2 coord, varying float4 rgba)");
 		begin_scope();
-        statement("if (coord.x >= image.width || coord.y >= image.height || coord.x < 0 || coord.y < 0)");
-        statement("    return;");
+		statement("if (coord.x >= image.width || coord.y >= image.height || coord.x < 0 || coord.y < 0)");
+		statement("    return;");
 		statement("varying float4 clamped_rgba = clamp(rgba, float4(0.0f), float4(1.0f));");
 		statement("varying unsigned int index = coord.y * image.width + coord.x;");
 		statement("varying pixel4D pix;");
