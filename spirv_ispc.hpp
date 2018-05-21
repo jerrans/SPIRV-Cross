@@ -126,7 +126,6 @@ protected:
 
 private:
 	void emit_header() override;
-	void emit_c_linkage();
 	void emit_ispc_main();
 	void emit_function_prototype(SPIRFunction &func, uint64_t return_flags) override;
 
