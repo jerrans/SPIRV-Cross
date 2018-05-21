@@ -42,6 +42,8 @@ using namespace std;
 // pull in from spirv_cross.cpp.
 string ensure_valid_identifier(const string &name, bool member);
 
+// Enable this define to print out the full dependancy chains used for determining if variables are vector/varying or scalar/uniform.
+// Default assumption is that they are uniform.
 #define DUMP_VARYING_DEPENDANCIES 0
 
 void CompilerISPC::emit_buffer_block(const SPIRVariable &var)
@@ -80,9 +82,9 @@ void CompilerISPC::emit_interface_block(const SPIRVariable &var)
 	else
 		buffer_name = type_to_glsl(type);
 
-	statement("internal::", qual, "<", buffer_name, type_to_array_glsl(type), "> ", instance_name, "__;");
-	statement_no_indent("#define ", instance_name, " __res->", instance_name, "__.get()");
-	statement("");
+//	statement("internal::", qual, "<", buffer_name, type_to_array_glsl(type), "> ", instance_name, "__;");
+//	statement_no_indent("#define ", instance_name, " __res->", instance_name, "__.get()");
+//	statement("");
 }
 
 void CompilerISPC::emit_shared(const SPIRVariable &var)
@@ -90,8 +92,8 @@ void CompilerISPC::emit_shared(const SPIRVariable &var)
 	add_resource_name(var.self);
 
 	auto instance_name = to_name(var.self);
-	statement(CompilerGLSL::variable_decl(var), ";");
-	statement_no_indent("#define ", instance_name, " __res->", instance_name);
+//	statement(CompilerGLSL::variable_decl(var), ";");
+//	statement_no_indent("#define ", instance_name, " __res->", instance_name);
 }
 
 void CompilerISPC::emit_uniform(const SPIRVariable &var)
@@ -110,7 +112,7 @@ void CompilerISPC::emit_uniform(const SPIRVariable &var)
 
 	if (type.basetype == SPIRType::AtomicCounter)
 	{
-		statement("internal::Resource<", type_name, type_to_array_glsl(type), "> ", instance_name, "__;");
+        //		statement("internal::Resource<", type_name, type_to_array_glsl(type), "> ", instance_name, "__;");
 		//		statement_no_indent("#define ", instance_name, " __res->", instance_name, "__.get()");
 		//		    join("s.register_resource(", instance_name, "__", ", ", descriptor_set, ", ", binding, ");"));
 	}
@@ -186,6 +188,11 @@ void CompilerISPC::emit_struct(SPIRType &type)
 			// if we are a runtime array that is a struct, we may need padding to conform to GLSL rules
 			if (!membertype.array.empty() && !membertype.array.back() && membertype.basetype == SPIRType::Struct)
 			{
+                // array_size comes from SPIRV, but this may be different to the actual size
+                // of the member struct elements that have been declared.
+                // ie. a struct may be rounded up to the nearest vec4 size, depending on the padding rules.
+                // This is generally only an issue for runtime arrays which require the correct padding so ISPC
+                // can iterate through the array correctly.
 				auto array_size = get_declared_struct_size(type);
 				auto member_size = get_declared_struct_size(membertype);
 				auto padding_size = array_size - member_size;
@@ -196,6 +203,8 @@ void CompilerISPC::emit_struct(SPIRType &type)
 					if (membertype.type_alias)
 						meta[membertype.type_alias].decoration.runtime_array_padding = padding_size;
 
+                    // The membertype may have already been written out, so we need to recompile it with the correct padding.
+                    // The padding meta data will persist through a re-compile.
 					force_recompile = true;
 				}
 			}
@@ -235,6 +244,7 @@ void CompilerISPC::emit_specialization_constants()
 			auto &type = get<SPIRType>(c.constant_type);
 			auto name = to_name(c.self);
 
+            // Don't support changing specialization constants at runtime, but do support them as #defines.
 			statement("#define ", name, " ", constant_expression(c));
 			//            statement("const ", variable_decl(type, name, 0), " = ", constant_expression(c), ";");
 			emitted = true;
@@ -371,6 +381,7 @@ void CompilerISPC::emit_resources()
 	statement("//////////////////////////////");
 }
 
+// Start looking for the varying variables.
 void CompilerISPC::find_vectorisation_variables()
 {
 	VectorisationHandler handler(*this);
@@ -439,57 +450,11 @@ string CompilerISPC::compile()
 		pass_count++;
 	} while (force_recompile);
 
-	// Match opening scope of emit_header().
-	//	end_scope_decl();
-	// namespace
-	//	end_scope();
-
-	// Emit C entry points
-	emit_c_linkage();
-
 	emit_ispc_main();
 
 	return buffer->str();
 }
 
-void CompilerISPC::emit_c_linkage()
-{
-	/*
-	statement("");
-
-	statement("spirv_cross_shader_t *spirv_cross_construct(void)");
-	begin_scope();
-	statement("return new ", impl_type, "();");
-	end_scope();
-
-	statement("");
-	statement("void spirv_cross_destruct(spirv_cross_shader_t *shader)");
-	begin_scope();
-	statement("delete static_cast<", impl_type, "*>(shader);");
-	end_scope();
-
-	statement("");
-	statement("void spirv_cross_invoke(spirv_cross_shader_t *shader)");
-	begin_scope();
-	statement("static_cast<", impl_type, "*>(shader)->invoke();");
-	end_scope();
-
-	statement("");
-	statement("static const struct spirv_cross_interface vtable =");
-	begin_scope();
-	statement("spirv_cross_construct,");
-	statement("spirv_cross_destruct,");
-	statement("spirv_cross_invoke,");
-	end_scope_decl();
-
-	statement("");
-	statement("const struct spirv_cross_interface *",
-	          interface_name.empty() ? string("spirv_cross_get_interface") : interface_name, "(void)");
-	begin_scope();
-	statement("return &vtable;");
-	end_scope();
-    */
-}
 
 void CompilerISPC::emit_ispc_main()
 {
@@ -782,27 +747,14 @@ void CompilerISPC::emit_header()
 	          ", ", execution.workgroup_size.z, "};");
 	statement("");
 
-	//	statement("#include \"spirv_cross/internal_interface.hpp\"");
-	//	statement("#include \"spirv_cross/external_interface.h\"");
-	// Needed to properly implement GLSL-style arrays.
-	//	statement("#include <array>");
-	//	statement("#include <stdint.h>");
-	//	statement("");
-	//	statement("using namespace spirv_cross;");
-	//	statement("using namespace glm;");
-	//	statement("");
-
-	//	statement("namespace Impl");
-	//	begin_scope();
-
 	switch (execution.model)
 	{
-	case ExecutionModelGeometry:
-	case ExecutionModelTessellationControl:
-	case ExecutionModelTessellationEvaluation:
+//	case ExecutionModelGeometry:
+//	case ExecutionModelTessellationControl:
+//	case ExecutionModelTessellationEvaluation:
 	case ExecutionModelGLCompute:
-	case ExecutionModelFragment:
-	case ExecutionModelVertex:
+//	case ExecutionModelFragment:
+//	case ExecutionModelVertex:
 		//		statement("struct Shader");
 		//		begin_scope();
 		break;
@@ -932,6 +884,7 @@ string CompilerISPC::type_to_glsl(const SPIRType &type, uint32_t id)
 		}
 		else
 		{
+            // Shouldn't be using short vectors due to padding issues. Should remove.
 			switch (type.basetype)
 			{
 			case SPIRType::Boolean:
@@ -955,6 +908,7 @@ string CompilerISPC::type_to_glsl(const SPIRType &type, uint32_t id)
 	}
 	else if (type.vecsize == type.columns) // Simple Matrix builtin
 	{
+        // Not fully supported yet. Will need stdlib implementations.
 		switch (type.basetype)
 		{
 		case SPIRType::Boolean:
@@ -974,7 +928,8 @@ string CompilerISPC::type_to_glsl(const SPIRType &type, uint32_t id)
 	}
 	else
 	{
-		switch (type.basetype)
+        // Not fully supported yet. Will need stdlib implementations.
+        switch (type.basetype)
 		{
 		case SPIRType::Boolean:
 			return join("bmat", type.columns, "x", type.vecsize);
@@ -997,6 +952,7 @@ string CompilerISPC::type_to_glsl(const SPIRType &type, uint32_t id)
 // if the LHS and RHS represent an assignment of an entire array, it must be
 // implemented by calling an array copy function.
 // Returns whether the struct assignment was emitted.
+// This should be optimised if the ISPC compiler doesn't already optimise it.
 bool CompilerISPC::maybe_emit_array_assignment(uint32_t id_lhs, uint32_t id_rhs)
 {
 	// Assignment from an array initializer is fine.
@@ -1362,6 +1318,10 @@ void CompilerISPC::emit_glsl_op(uint32_t result_type, uint32_t id, uint32_t eop,
 	}
 }
 
+//
+// This is the handler function for creating the dependancy tree used for figuring out the
+// uniform/varyings.
+//
 bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *args, uint32_t length)
 {
 	// dst = src; dst is dependant upon src, so [src] = dst
@@ -1404,12 +1364,33 @@ bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *
 		add_dependancies(args[0], args[1]);
 
 		auto *var = compiler.maybe_get<SPIRVariable>(args[0]);
+
+        // Ignore loop variables as they should always be uniform
 		if (var && !var->loop_variable)
 		{
-			// If the variable has scope outside of the blocks contained with the current conditional,
+            //
+			// If the variable has scope outside of the blocks contained within the current conditional,
 			// add it as a dependancy on the current conditional.
 			// Walk the stack of conditionals if true.
+            // ie.
+            // float a = 0.0;
+            // if (b)
+            //    a = 1.0;
+            //
+            // if b is a varying conditional, then a also needs to be a varying variable
+            //
 			unordered_set<uint32_t> visited_blocks;
+            
+            // The stack of nested conditional blocks is updated by the handler whenever a new conditional block is entered.
+            // It therefore contains a stack of dependant conditional blocks that all depend on each other, so if a
+            // high level conditional block is a varying, then all of its child conditional blocks will also be varyings.
+            //
+            // If a store occurs within a (possibly nested) conditional block, then the variable should depend on the conditional.
+            // The exceptions are :
+            //   * If the conditional block is in a different function
+            //   * If store is within the conditionals this_block (which means the condition hasn't been branched yet)
+            //   * If the variable is declared within the scope of the current conditional, then it shouldn't depend on
+            //       the conditional as its not enough information to determine if it is a varying/uniform.
 			for (auto conditional : condition_block_stack)
 			{
 				bool depend_on_condition = true;
@@ -1419,6 +1400,7 @@ bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *
 					depend_on_condition = false;
 				else
 				{
+                    // Use the control flow graph that the handler generates per function.
 					visited_blocks.clear();
 					cfg_stack.top()->walk_from(visited_blocks, current_block->self, [&](uint32_t walk_block) {
 						if (walk_block == conditional->this_block)
@@ -1429,13 +1411,14 @@ bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *
 							for (auto &v : b.dominated_variables)
 							{
 
-								// Found between current block and conditional
+								// Found between current block and conditional, so no dependancy
 								if (v == args[0])
 									depend_on_condition = false;
 							}
 						}
 					});
 				}
+                // Add the dependancy to the conditional
 				if (depend_on_condition)
 				{
 					add_dependancies(args[0], conditional->condition);
@@ -1498,7 +1481,7 @@ bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *
 	case OpAtomicXor:
 	case OpAtomicExchange:
 	{
-		// Atomics take uniform arguments (a buffer), but return varying results...
+		// Atomics take uniform arguments (a buffer), but return varying results, so force them to be varying
 		compiler.meta[args[1]].decoration.ispc_varying = true;
 		break;
 	}
@@ -1517,7 +1500,7 @@ bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *
 
 void CompilerISPC::VectorisationHandler::set_current_function(const SPIRFunction &func)
 {
-	// Create the CFG
+	// Create the CFG for the current function and push it onto the stack
 	cfg_stack.push(new CFG(compiler, func));
 	current_func = &cfg_stack.top()->get_function();
 }
@@ -1529,6 +1512,7 @@ bool CompilerISPC::VectorisationHandler::begin_function_scope(const uint32_t *, 
 
 bool CompilerISPC::VectorisationHandler::end_function_scope(const uint32_t *, uint32_t)
 {
+    // Pop the stack
 	CFG *cfg = cfg_stack.top();
 	if (cfg)
 		delete cfg;
@@ -1543,6 +1527,8 @@ void CompilerISPC::VectorisationHandler::set_current_block(const SPIRBlock &bloc
 {
 	current_block = &block;
 
+    // Add a new block to the conditional block tracker. This is required for the correct dependancy tracking
+    // of stores to dependancy blocks.
 	if (current_block->condition)
 	{
 		conditional_block_tracker *cbt = new conditional_block_tracker;
@@ -1563,6 +1549,7 @@ void CompilerISPC::VectorisationHandler::set_current_block(const SPIRBlock &bloc
 	}
 	else
 	{
+        // Need to work out when we have left the conditional block so we can pop the cbt from the stack
 		while (!condition_block_stack.empty())
 		{
 			conditional_block_tracker *cbt = condition_block_stack.back();
@@ -1619,6 +1606,8 @@ void CompilerISPC::VectorisationHandler::set_current_block(const SPIRBlock &bloc
 	}
 }
 
+// The dependacy graph has already been created at this point and some initial varying variable have already
+// been seeded, so find the varyings and propogate down the dependancy tree
 bool CompilerISPC::VectorisationHandler::propogate_ispc_varyings(const uint32_t var)
 {
 	bool bPropogate = false;
@@ -1637,7 +1626,6 @@ bool CompilerISPC::VectorisationHandler::propogate_ispc_varyings(const uint32_t 
 
 					// Propogate to all variables dependant upon this variable
 					propogate_ispc_varyings(dependantVarIt);
-					//                    propogate_ispc_varyings_up(dependantVarIt);
 				}
 			}
 		}
@@ -1646,6 +1634,9 @@ bool CompilerISPC::VectorisationHandler::propogate_ispc_varyings(const uint32_t 
 	return bPropogate;
 }
 
+// Currently not used, but saved for experimentation.
+// Reverse propogation ended up converting too many variables to varying, but could be useful
+// if we find a very tricky case that can't be solved any other way!
 bool CompilerISPC::VectorisationHandler::reverse_propogate_ispc_varyings(const uint32_t var)
 {
 	bool bPropogate = false;
@@ -1664,7 +1655,6 @@ bool CompilerISPC::VectorisationHandler::reverse_propogate_ispc_varyings(const u
 
 					// Propogate to all variables dependant upon this variable
 					reverse_propogate_ispc_varyings(dependantVarIt);
-					//                    propogate_ispc_varyings_up(dependantVarIt);
 				}
 			}
 		}
@@ -1673,6 +1663,8 @@ bool CompilerISPC::VectorisationHandler::reverse_propogate_ispc_varyings(const u
 	return bPropogate;
 }
 
+// Seed the varyings here based on usage of the builtins. If the shader is using a local invocation ID, it
+// is requesting vectorisation as the ID will be unique per SIMD lane.
 bool CompilerISPC::VectorisationHandler::propogate_ispc_varyings_for_builtins()
 {
 	bool bPropogate = false;
@@ -1692,7 +1684,7 @@ bool CompilerISPC::VectorisationHandler::propogate_ispc_varyings_for_builtins()
 				bPropogate |= propogate_ispc_varyings(dependeeVarIt.first);
 			}
 		}
-		// This will catch any pre-determined varying args.
+		// This will catch any pre-determined varying variables (like atomics).
 		else if (compiler.meta[dependeeVarIt.first].decoration.ispc_varying)
 		{
 			bPropogate |= propogate_ispc_varyings(dependeeVarIt.first);
@@ -1714,6 +1706,7 @@ bool CompilerISPC::VectorisationHandler::propogate_ispc_varyings_for_builtins()
 	return bPropogate;
 }
 
+// Useful print mechanism to track varying dependancies
 void CompilerISPC::VectorisationHandler::dump_varying_dependancy_branch(const uint32_t index, uint32_t tab_count,
                                                                         bool recurse,
                                                                         std::unordered_set<uint32_t> &branch)
@@ -1793,8 +1786,7 @@ void CompilerISPC::find_loop_variables_from_functions()
 	find_loop_variables_from_function(entry_point, processed_functions);
 }
 
-// For any global variable accessed directly by a function,
-// extract that variable and add it as an argument to that function.
+// Find loop variables within a function as they shouldn't depend on any conditionals.
 void CompilerISPC::find_loop_variables_from_function(uint32_t func_id,
                                                      std::unordered_set<uint32_t> &processed_functions)
 {
@@ -1809,7 +1801,7 @@ void CompilerISPC::find_loop_variables_from_function(uint32_t func_id,
 	// This *may* have side affects, but it should work out the loop variables.
 	// These are needed as we don't want to make these dependant on conditional branches
 	// and they are represented firstly by a store (initialise), followed by a loop construct.
-	// When doing the varying analysis, we don't know if it is a loop variable otherwise.
+	// Otherwise, when doing the varying analysis, we don't know if it is a loop variable.
 	if (!func.analyzed_variable_scope)
 		analyze_variable_scope(func);
 
@@ -1875,7 +1867,7 @@ void CompilerISPC::extract_global_variables_from_functions()
 	extract_global_variables_from_function(entry_point, added_arg_ids, global_var_ids, processed_func_ids);
 }
 
-// MSL does not support the use of global variables for shader input content.
+// ISPC does not support the use of global variables for shader input content.
 // For any global variable accessed directly by the specified function, extract that variable,
 // add it as an argument to that function, and the arg to the added_arg_ids collection.
 void CompilerISPC::extract_global_variables_from_function(uint32_t func_id, std::set<uint32_t> &added_arg_ids,
@@ -2097,7 +2089,6 @@ string CompilerISPC::entry_point_args(bool append_comma, bool want_builtins)
 				if (!ep_args.empty())
 					ep_args += ", ";
 				ep_args += "uniform " + type_to_glsl(type, var_id) + " &" + to_name(var_id);
-				//                ep_args += " [[texture(" + convert_to_string(get_metal_resource_index(var, type.basetype)) + ")]]";
 				break;
 			default:
 				break;
@@ -2403,6 +2394,9 @@ string CompilerISPC::layout_for_member(const SPIRType &, uint32_t)
 	return "";
 }
 
+//
+// Now for the codegen for the stdlib ISPC include file
+//
 void CompilerISPC::codegen_default_binary_op(std::string type, uint32_t width, std::string op)
 {
 	vector<string> varying = { "uniform ", "varying " };
