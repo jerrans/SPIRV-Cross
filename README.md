@@ -4,7 +4,7 @@ SPIRV-Cross is a tool designed for parsing and converting SPIR-V to other shader
 
 ## SPIRV to ISPC Support
 
-Intel modifications are to add ISPC kernel output support, primarily for SPIRV compute shaders from HLSL/GLSL. This is very much a WIP project.
+Intel modifications are to add ISPC kernel output support, primarily for SPIRV compute shaders from HLSL/GLSL. This is very much a WIP project and more information about the intended usage can be found in this accompanying [blog article](https://software.intel.com/en-us/articles/spir-v-to-ispc-convert-gpu-compute-to-the-cpu).
 
 
 
