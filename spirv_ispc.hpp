@@ -170,11 +170,11 @@ private:
 
 	void localize_global_variables();
 	std::string ensure_valid_name(std::string name, std::string pfx);
-	std::string CompilerISPC::entry_point_args(bool append_comma, bool want_builtins);
-	std::string CompilerISPC::entry_point_args_init(bool append_comma, bool want_builtins);
+	std::string entry_point_args(bool append_comma, bool want_builtins);
+	std::string entry_point_args_init(bool append_comma, bool want_builtins);
 	void find_entry_point_args();
 	std::string layout_for_member(const SPIRType &type, uint32_t index) override;
-	bool optimize_read_modify_write(const std::string &lhs, const std::string &rhs)
+	bool optimize_read_modify_write(const std::string &, const std::string &)
 	{
 		return false;
 	}
@@ -205,62 +205,56 @@ private:
 	void codegen_default_binary_op(std::string type, uint32_t width, std::string op);
 
 	void codegen_unary_float_op(
-	    std::string func_name, std::vector<std::vector<std::string>> &varyings,
-	    std::vector<std::uint32_t> &vector_width,
+	    std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::uint32_t> vector_width,
 	    const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
 	void codegen_unary_float_op_scalar_return(
-	    std::string func_name, std::vector<std::vector<std::string>> &varyings,
-	    std::vector<std::uint32_t> &vector_width,
+	    std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::uint32_t> vector_width,
 	    const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
 	void codegen_unary_float_op_scalar_bool_return(
-	    std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> &vector_width,
+	    std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> vector_width,
 	    const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
 	void codegen_unary_float_op_simple(std::string func_name, std::vector<std::vector<std::string>> &varyings,
-	                                   std::vector<uint32_t> &vector_width);
+	                                   std::vector<uint32_t> vector_width);
 	void codegen_unary_float_op_int_return(
-	    std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> &vector_width,
+	    std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<uint32_t> vector_width,
 	    const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
 
 	void codegen_binary_float_op(
-	    std::string func_name, std::vector<std::vector<std::string>> &varyings,
-	    std::vector<std::uint32_t> &vector_width,
+	    std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::uint32_t> vector_width,
 	    const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
 	void codegen_binary_float_op_scalar_return(
-	    std::string func_name, std::vector<std::vector<std::string>> &varyings,
-	    std::vector<std::uint32_t> &vector_width,
+	    std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::uint32_t> vector_width,
 	    const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
 	void codegen_binary_float_op_simple(std::string func_name, std::vector<std::vector<std::string>> &varyings,
-	                                    std::vector<uint32_t> &vector_width);
+	                                    std::vector<uint32_t> vector_width);
 
 	void codegen_ternary_float_op(
-	    std::string func_name, std::vector<std::vector<std::string>> &varyings,
-	    std::vector<std::uint32_t> &vector_width,
+	    std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::uint32_t> vector_width,
 	    const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
 	void codegen_ternary_float_op_scalar_return(
-	    std::string func_name, std::vector<std::vector<std::string>> &varyings,
-	    std::vector<std::uint32_t> &vector_width,
+	    std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::uint32_t> vector_width,
 	    const std::function<void(std::vector<std::string> varyings, uint32_t vector_width)> &func);
 	void codegen_ternary_float_op_simple(std::string func_name, std::vector<std::vector<std::string>> &varyings,
-	                                     std::vector<uint32_t> &vector_width);
+	                                     std::vector<uint32_t> vector_width);
 	void codegen_ternary_float_op_multiple_widths(
 	    std::string func_name, std::vector<std::vector<std::string>> &varyings,
-	    std::vector<std::vector<uint32_t>> &vector_widths,
+	    std::vector<std::vector<uint32_t>> vector_widths,
 	    const std::function<void(std::vector<std::string> varyings, std::vector<uint32_t> vector_widths)> &func);
 
 	void codegen_unary_op_scalar_return(
 	    std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::string> &types,
-	    std::vector<uint32_t> &vector_width,
+	    std::vector<uint32_t> vector_width,
 	    const std::function<void(std::vector<std::string> varyings, std::vector<std::string> types,
 	                             uint32_t vector_width)> &func);
 
 	void codegen_binary_op_scalar_return(
 	    std::string func_name, std::vector<std::vector<std::string>> &varyings, std::vector<std::string> &types,
-	    std::vector<uint32_t> &vector_width,
+	    std::vector<uint32_t> vector_width,
 	    const std::function<void(std::vector<std::string> varyings, std::vector<std::string> types,
 	                             uint32_t vector_width)> &func);
 
 	void codegen_binary_op(std::string func_name, std::vector<std::vector<std::string>> &varyings,
-	                       std::vector<std::string> &types, std::vector<uint32_t> &vector_width,
+	                       std::vector<std::string> &types, std::vector<uint32_t> vector_width,
 	                       const std::function<void(std::vector<std::string> varyings, std::vector<std::string> types,
 	                                                uint32_t vector_width)> &func);
 };
