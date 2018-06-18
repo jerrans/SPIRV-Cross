@@ -638,6 +638,47 @@ void CompilerISPC::emit_function_prototype(SPIRFunction &func, const Bitset &)
 	statement(decl);
 }
 
+bool CompilerISPC::optimize_read_modify_write(const SPIRType &type, const string &lhs, const string &rhs)
+{
+    // Do this with strings because we have a very clear pattern we can check for and it avoids
+    // adding lots of special cases to the code emission.
+    if (rhs.size() < lhs.size() + 3)
+        return false;
+
+    // Do not optimize matrices. They are a bit awkward to reason about in general
+    // (in which order does operation happen?), and it does not work on MSL anyways.
+    // ISPC - Reinstate if ISPC starts supporting += overloading
+ //   if (type.vecsize > 1 && type.columns > 1)
+ //       return false;
+
+    // ISPC does not allow operater overloading for structs for +=, so don't allow optimisation for vectors 
+    if (type.vecsize > 1)
+        return false;
+
+    auto index = rhs.find(lhs);
+    if (index != 0)
+        return false;
+
+    // TODO: Shift operators, but it's not important for now.
+    auto op = rhs.find_first_of("+-/*%|&^", lhs.size() + 1);
+    if (op != lhs.size() + 1)
+        return false;
+
+    // Check that the op is followed by space. This excludes && and ||.
+    if (rhs[op + 1] != ' ')
+        return false;
+
+    char bop = rhs[op];
+    auto expr = rhs.substr(lhs.size() + 3);
+    // Try to find increments and decrements. Makes it look neater as += 1, -= 1 is fairly rare to see in real code.
+    // Find some common patterns which are equivalent.
+    if ((bop == '+' || bop == '-') && (expr == "1" || expr == "uint(1)" || expr == "1u" || expr == "int(1u)"))
+        statement(lhs, bop, bop, ";");
+    else
+        statement(lhs, " ", bop, "= ", expr, ";");
+    return true;
+}
+
 string CompilerISPC::argument_decl(const SPIRFunction::Parameter &arg)
 {
 	auto &type = expression_type(arg.id);
