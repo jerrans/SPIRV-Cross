@@ -156,8 +156,7 @@ private:
 	std::string type_to_glsl(const SPIRType &type, uint32_t id = 0) override;
 	std::string type_to_glsl_constructor(const SPIRType &type) override;
 	std::string bitcast_glsl_op(const SPIRType &result_type, const SPIRType &argument_type) override;
-    bool optimize_read_modify_write(const SPIRType &type, const std::string &lhs, const std::string &rhs) override;
-
+	bool optimize_read_modify_write(const SPIRType &type, const std::string &lhs, const std::string &rhs) override;
 
 	void find_vectorisation_variables();
 

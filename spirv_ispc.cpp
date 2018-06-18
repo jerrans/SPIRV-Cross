@@ -208,27 +208,27 @@ void CompilerISPC::emit_specialization_constants()
 	bool emitted = false;
 	for (auto &id : ids)
 	{
-        if (id.get_type() == TypeConstant)
-        {
-            auto &c = id.get<SPIRConstant>();
-            if (!c.specialization)
-                continue;
+		if (id.get_type() == TypeConstant)
+		{
+			auto &c = id.get<SPIRConstant>();
+			if (!c.specialization)
+				continue;
 
-            auto name = to_name(c.self);
+			auto name = to_name(c.self);
 
-            // Don't support changing specialization constants at runtime, but do support them as #defines.
-            statement("#define ", name, " ", constant_expression(c));
-            emitted = true;
-        }
-        else if (id.get_type() == TypeConstantOp)
-        {
-            auto &c = id.get<SPIRConstantOp>();
-            auto &type = get<SPIRType>(c.basetype);
-            auto name = to_name(c.self);
-            statement("static const uniform ", variable_decl(type, name, 0), " = ", constant_op_expression(c), ";");
-            emitted = true;
-        }
-    }
+			// Don't support changing specialization constants at runtime, but do support them as #defines.
+			statement("#define ", name, " ", constant_expression(c));
+			emitted = true;
+		}
+		else if (id.get_type() == TypeConstantOp)
+		{
+			auto &c = id.get<SPIRConstantOp>();
+			auto &type = get<SPIRType>(c.basetype);
+			auto name = to_name(c.self);
+			statement("static const uniform ", variable_decl(type, name, 0), " = ", constant_op_expression(c), ";");
+			emitted = true;
+		}
+	}
 
 	if (emitted)
 		statement("");
@@ -253,11 +253,11 @@ void CompilerISPC::emit_resources()
 	statement("//////////////////////////////");
 	statement("// Resources");
 	statement("//////////////////////////////");
-    
-    // Specialisation constants and constant ops before the resources, in case they are used within.
-    emit_specialization_constants();
-    
-    for (auto &id : ids)
+
+	// Specialisation constants and constant ops before the resources, in case they are used within.
+	emit_specialization_constants();
+
+	for (auto &id : ids)
 	{
 		if (id.get_type() == TypeType)
 		{
@@ -394,10 +394,10 @@ string CompilerISPC::compile()
 
 	update_active_builtins();
 
-    // Write to the stdlib buffer, then swap the buffer pointers over.
-    buffer = unique_ptr<ostringstream>(new ostringstream());
-    emit_stdlib();
-    stdlib_buffer = std::move(buffer);
+	// Write to the stdlib buffer, then swap the buffer pointers over.
+	buffer = unique_ptr<ostringstream>(new ostringstream());
+	emit_stdlib();
+	stdlib_buffer = std::move(buffer);
 
 	uint32_t pass_count = 0;
 	do
@@ -639,43 +639,43 @@ void CompilerISPC::emit_function_prototype(SPIRFunction &func, const Bitset &)
 
 bool CompilerISPC::optimize_read_modify_write(const SPIRType &type, const string &lhs, const string &rhs)
 {
-    // Do this with strings because we have a very clear pattern we can check for and it avoids
-    // adding lots of special cases to the code emission.
-    if (rhs.size() < lhs.size() + 3)
-        return false;
+	// Do this with strings because we have a very clear pattern we can check for and it avoids
+	// adding lots of special cases to the code emission.
+	if (rhs.size() < lhs.size() + 3)
+		return false;
 
-    // Do not optimize matrices. They are a bit awkward to reason about in general
-    // (in which order does operation happen?), and it does not work on MSL anyways.
-    // ISPC - Reinstate if ISPC starts supporting += overloading
- //   if (type.vecsize > 1 && type.columns > 1)
- //       return false;
+	// Do not optimize matrices. They are a bit awkward to reason about in general
+	// (in which order does operation happen?), and it does not work on MSL anyways.
+	// ISPC - Reinstate if ISPC starts supporting += overloading
+	//   if (type.vecsize > 1 && type.columns > 1)
+	//       return false;
 
-    // ISPC does not allow operater overloading for structs for +=, so don't allow optimisation for vectors 
-    if (type.vecsize > 1)
-        return false;
+	// ISPC does not allow operater overloading for structs for +=, so don't allow optimisation for vectors
+	if (type.vecsize > 1)
+		return false;
 
-    auto index = rhs.find(lhs);
-    if (index != 0)
-        return false;
+	auto index = rhs.find(lhs);
+	if (index != 0)
+		return false;
 
-    // TODO: Shift operators, but it's not important for now.
-    auto op = rhs.find_first_of("+-/*%|&^", lhs.size() + 1);
-    if (op != lhs.size() + 1)
-        return false;
+	// TODO: Shift operators, but it's not important for now.
+	auto op = rhs.find_first_of("+-/*%|&^", lhs.size() + 1);
+	if (op != lhs.size() + 1)
+		return false;
 
-    // Check that the op is followed by space. This excludes && and ||.
-    if (rhs[op + 1] != ' ')
-        return false;
+	// Check that the op is followed by space. This excludes && and ||.
+	if (rhs[op + 1] != ' ')
+		return false;
 
-    char bop = rhs[op];
-    auto expr = rhs.substr(lhs.size() + 3);
-    // Try to find increments and decrements. Makes it look neater as += 1, -= 1 is fairly rare to see in real code.
-    // Find some common patterns which are equivalent.
-    if ((bop == '+' || bop == '-') && (expr == "1" || expr == "uint(1)" || expr == "1u" || expr == "int(1u)"))
-        statement(lhs, bop, bop, ";");
-    else
-        statement(lhs, " ", bop, "= ", expr, ";");
-    return true;
+	char bop = rhs[op];
+	auto expr = rhs.substr(lhs.size() + 3);
+	// Try to find increments and decrements. Makes it look neater as += 1, -= 1 is fairly rare to see in real code.
+	// Find some common patterns which are equivalent.
+	if ((bop == '+' || bop == '-') && (expr == "1" || expr == "uint(1)" || expr == "1u" || expr == "int(1u)"))
+		statement(lhs, bop, bop, ";");
+	else
+		statement(lhs, " ", bop, "= ", expr, ";");
+	return true;
 }
 
 string CompilerISPC::argument_decl(const SPIRFunction::Parameter &arg)
