@@ -114,16 +114,16 @@ float4 fetch_attr(thread const attr_desc& desc, thread const int& vertex_id, thr
             }
         }
     }
-    float4 _209;
+    float4 _210;
     if (reverse_order)
     {
-        _209 = result.wzyx;
+        _210 = result.wzyx;
     }
     else
     {
-        _209 = result;
+        _210 = result;
     }
-    return _209;
+    return _210;
 }
 
 float4 read_location(thread const int& location, constant VertexBuffer& v_227, thread uint& gl_VertexIndex, thread texture2d<uint> buff_in_2, thread texture2d<uint> buff_in_1)
@@ -159,8 +159,7 @@ void vs_adjust(thread float4& dst_reg0, thread float4& dst_reg1, thread float4& 
     tmp0.y = float4(dot(float4(in_pos.xyz, 1.0), v_309.vc[5])).y;
     tmp0.z = float4(dot(float4(in_pos.xyz, 1.0), v_309.vc[6])).z;
     float4 tmp1;
-    float4 _359 = float4(in_tc0.xy.x, in_tc0.xy.y, tmp1.z, tmp1.w);
-    tmp1 = _359;
+    tmp1 = float4(in_tc0.xy.x, in_tc0.xy.y, tmp1.z, tmp1.w);
     tmp1.z = v_309.vc[15].x;
     dst_reg7.y = float4(dot(float4(tmp1.xyz, 1.0), v_309.vc[8])).y;
     dst_reg7.x = float4(dot(float4(tmp1.xyz, 1.0), v_309.vc[7])).x;
@@ -168,7 +167,7 @@ void vs_adjust(thread float4& dst_reg0, thread float4& dst_reg1, thread float4& 
     dst_reg0.x = float4(dot(float4(tmp0.xyz, 1.0), v_309.vc[0])).x;
 }
 
-vertex main0_out main0(constant VertexBuffer& v_227 [[buffer(0)]], uint gl_VertexIndex [[vertex_id]], texture2d<uint> buff_in_2 [[texture(0)]], texture2d<uint> buff_in_1 [[texture(1)]], constant VertexConstantsBuffer& v_309 [[buffer(1)]])
+vertex main0_out main0(constant VertexBuffer& v_227 [[buffer(0)]], constant VertexConstantsBuffer& v_309 [[buffer(1)]], texture2d<uint> buff_in_1 [[texture(3)]], texture2d<uint> buff_in_2 [[texture(4)]], uint gl_VertexIndex [[vertex_id]])
 {
     main0_out out = {};
     float4 dst_reg0 = float4(0.0, 0.0, 0.0, 1.0);

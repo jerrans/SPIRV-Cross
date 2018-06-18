@@ -127,7 +127,7 @@ protected:
 private:
 	void emit_header() override;
 	void emit_ispc_main();
-	void emit_function_prototype(SPIRFunction &func, uint64_t return_flags) override;
+	void emit_function_prototype(SPIRFunction &func, const Bitset &return_flags) override;
 
 	void emit_resources();
 	void emit_buffer_block(const SPIRVariable &type) override;
@@ -156,6 +156,7 @@ private:
 	std::string type_to_glsl(const SPIRType &type, uint32_t id = 0) override;
 	std::string type_to_glsl_constructor(const SPIRType &type) override;
 	std::string bitcast_glsl_op(const SPIRType &result_type, const SPIRType &argument_type) override;
+	bool optimize_read_modify_write(const SPIRType &type, const std::string &lhs, const std::string &rhs) override;
 
 	void find_vectorisation_variables();
 
