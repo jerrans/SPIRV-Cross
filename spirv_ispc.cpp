@@ -394,6 +394,11 @@ string CompilerISPC::compile()
 
 	update_active_builtins();
 
+    // Write to the stdlib buffer, then swap the buffer pointers over.
+    buffer = unique_ptr<ostringstream>(new ostringstream());
+    emit_stdlib();
+    stdlib_buffer = std::move(buffer);
+
 	uint32_t pass_count = 0;
 	do
 	{
@@ -412,12 +417,6 @@ string CompilerISPC::compile()
 		find_loop_variables_from_functions();
 
 		find_vectorisation_variables();
-
-		// Move constructor for this type is broken on GCC 4.9 ...
-		// Write to the stdlib buffer, then swap the buffer pointers over.
-		buffer = unique_ptr<ostringstream>(new ostringstream());
-		emit_stdlib();
-		stdlib_buffer = std::move(buffer);
 
 		buffer = unique_ptr<ostringstream>(new ostringstream());
 		emit_header();
