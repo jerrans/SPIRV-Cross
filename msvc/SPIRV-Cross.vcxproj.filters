@@ -39,6 +39,9 @@
     <ClCompile Include="..\spirv_hlsl.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\spirv_cross_util.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\spirv_ispc.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -69,6 +72,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\spirv_hlsl.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\spirv_cross_util.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\spirv_ispc.hpp">

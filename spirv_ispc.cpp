@@ -69,8 +69,7 @@ void CompilerISPC::emit_interface_block(const SPIRVariable &var)
 	auto instance_name = to_name(var.self);
 
 	string buffer_name;
-	auto flags = meta[type.self].decoration.decoration_flags;
-	if (flags & (1ull << DecorationBlock))
+	if (meta[type.self].decoration.decoration_flags.get(DecorationBlock))
 	{
 		emit_block_struct(type);
 		buffer_name = to_name(type.self);
@@ -107,7 +106,7 @@ void CompilerISPC::emit_push_constant_block(const SPIRVariable &var)
 
 	auto &type = get<SPIRType>(var.basetype);
 	auto &flags = meta[var.self].decoration.decoration_flags;
-	if ((flags & (1ull << DecorationBinding)) || (flags & (1ull << DecorationDescriptorSet)))
+	if ((flags.get(DecorationBinding) || flags.get(DecorationDescriptorSet)))
 		SPIRV_CROSS_THROW("Push constant blocks cannot be compiled to GLSL with Binding or Set syntax. "
 		                  "Remap to location with reflection API first or disable these decorations.");
 
@@ -252,8 +251,8 @@ void CompilerISPC::emit_resources()
 		{
 			auto &type = id.get<SPIRType>();
 			if (type.basetype == SPIRType::Struct && type.array.empty() && !type.pointer &&
-			    (meta[type.self].decoration.decoration_flags &
-			     ((1ull << DecorationBlock) | (1ull << DecorationBufferBlock))) == 0)
+			    !(meta[type.self].decoration.decoration_flags.get(DecorationBlock) &&
+			      meta[type.self].decoration.decoration_flags.get(DecorationBufferBlock)))
 			{
 				emit_struct(type);
 			}
@@ -273,8 +272,8 @@ void CompilerISPC::emit_resources()
 
 			if (var.storage != StorageClassFunction && type.pointer && type.storage == StorageClassUniform &&
 			    !is_hidden_variable(var) &&
-			    (meta[type.self].decoration.decoration_flags &
-			     ((1ull << DecorationBlock) | (1ull << DecorationBufferBlock))))
+			    (meta[type.self].decoration.decoration_flags.get(DecorationBlock) &&
+			     meta[type.self].decoration.decoration_flags.get(DecorationBufferBlock)))
 			{
 				emit_buffer_block(var);
 			}
@@ -415,7 +414,7 @@ string CompilerISPC::compile()
 		emit_header();
 		emit_resources();
 
-		emit_function(get<SPIRFunction>(entry_point), 0);
+		emit_function(get<SPIRFunction>(entry_point), Bitset(0));
 
 		pass_count++;
 	} while (force_recompile);
@@ -583,7 +582,7 @@ void CompilerISPC::emit_ispc_main()
 	statement("");
 }
 
-void CompilerISPC::emit_function_prototype(SPIRFunction &func, uint64_t)
+void CompilerISPC::emit_function_prototype(SPIRFunction &func, const Bitset &)
 {
 	local_variable_names = resource_names;
 	string decl;

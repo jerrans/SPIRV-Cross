@@ -127,7 +127,7 @@ protected:
 private:
 	void emit_header() override;
 	void emit_ispc_main();
-	void emit_function_prototype(SPIRFunction &func, uint64_t return_flags) override;
+	void emit_function_prototype(SPIRFunction &func, const Bitset &return_flags) override;
 
 	void emit_resources();
 	void emit_buffer_block(const SPIRVariable &type) override;
