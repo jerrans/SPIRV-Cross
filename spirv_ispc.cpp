@@ -46,7 +46,6 @@ string ensure_valid_identifier(const string &name, bool member);
 // Default assumption is that they are uniform.
 #define DUMP_VARYING_DEPENDANCIES 0
 
-// Ignore
 void CompilerISPC::emit_buffer_block(const SPIRVariable &var)
 {
 	add_resource_name(var.self);
@@ -59,7 +58,6 @@ void CompilerISPC::emit_buffer_block(const SPIRVariable &var)
 	statement("");
 }
 
-// Ignore
 void CompilerISPC::emit_interface_block(const SPIRVariable &var)
 {
 	add_resource_name(var.self);
@@ -78,7 +76,6 @@ void CompilerISPC::emit_interface_block(const SPIRVariable &var)
 		buffer_name = type_to_glsl(type);
 }
 
-// Ignore
 void CompilerISPC::emit_shared(const SPIRVariable &var)
 {
 	add_resource_name(var.self);
@@ -86,7 +83,6 @@ void CompilerISPC::emit_shared(const SPIRVariable &var)
 	auto instance_name = to_name(var.self);
 }
 
-// Ignore
 void CompilerISPC::emit_uniform(const SPIRVariable &var)
 {
 	add_resource_name(var.self);
