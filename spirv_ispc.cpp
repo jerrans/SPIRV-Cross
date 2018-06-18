@@ -263,7 +263,7 @@ void CompilerISPC::emit_resources()
 		{
 			auto &type = id.get<SPIRType>();
 			if (type.basetype == SPIRType::Struct && type.array.empty() && !type.pointer &&
-			    !(meta[type.self].decoration.decoration_flags.get(DecorationBlock) &&
+			    !(meta[type.self].decoration.decoration_flags.get(DecorationBlock) ||
 			      meta[type.self].decoration.decoration_flags.get(DecorationBufferBlock)))
 			{
 				emit_struct(type);
@@ -281,7 +281,7 @@ void CompilerISPC::emit_resources()
 
 			if (var.storage != StorageClassFunction && type.pointer && type.storage == StorageClassUniform &&
 			    !is_hidden_variable(var) &&
-			    (meta[type.self].decoration.decoration_flags.get(DecorationBlock) &&
+			    (meta[type.self].decoration.decoration_flags.get(DecorationBlock) ||
 			     meta[type.self].decoration.decoration_flags.get(DecorationBufferBlock)))
 			{
 				emit_buffer_block(var);
