@@ -208,19 +208,27 @@ void CompilerISPC::emit_specialization_constants()
 	bool emitted = false;
 	for (auto &id : ids)
 	{
-		if (id.get_type() == TypeConstant)
-		{
-			auto &c = id.get<SPIRConstant>();
-			if (!c.specialization)
-				continue;
+        if (id.get_type() == TypeConstant)
+        {
+            auto &c = id.get<SPIRConstant>();
+            if (!c.specialization)
+                continue;
 
-			auto name = to_name(c.self);
+            auto name = to_name(c.self);
 
-			// Don't support changing specialization constants at runtime, but do support them as #defines.
-			statement("#define ", name, " ", constant_expression(c));
-			emitted = true;
-		}
-	}
+            // Don't support changing specialization constants at runtime, but do support them as #defines.
+            statement("#define ", name, " ", constant_expression(c));
+            emitted = true;
+        }
+        else if (id.get_type() == TypeConstantOp)
+        {
+            auto &c = id.get<SPIRConstantOp>();
+            auto &type = get<SPIRType>(c.basetype);
+            auto name = to_name(c.self);
+            statement("static const uniform ", variable_decl(type, name, 0), " = ", constant_op_expression(c), ";");
+            emitted = true;
+        }
+    }
 
 	if (emitted)
 		statement("");
@@ -245,7 +253,11 @@ void CompilerISPC::emit_resources()
 	statement("//////////////////////////////");
 	statement("// Resources");
 	statement("//////////////////////////////");
-	for (auto &id : ids)
+    
+    // Specialisation constants and constant ops before the resources, in case they are used within.
+    emit_specialization_constants();
+    
+    for (auto &id : ids)
 	{
 		if (id.get_type() == TypeType)
 		{
@@ -258,9 +270,6 @@ void CompilerISPC::emit_resources()
 			}
 		}
 	}
-
-	// Specialisation constants
-	emit_specialization_constants();
 
 	// Output UBOs and SSBOs
 	for (auto &id : ids)
