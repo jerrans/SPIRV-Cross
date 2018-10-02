@@ -88,10 +88,10 @@ protected:
 		{
 		}
 
-		void set_current_block(const SPIRBlock &);
-		void set_current_function(const SPIRFunction &);
-		bool begin_function_scope(const uint32_t *, uint32_t);
-		bool end_function_scope(const uint32_t *, uint32_t);
+		void set_current_block(const SPIRBlock &) override;
+		void set_current_function(const SPIRFunction &) override;
+		bool begin_function_scope(const uint32_t *, uint32_t) override;
+		bool end_function_scope(const uint32_t *, uint32_t) override;
 
 		bool handle(spv::Op opcode, const uint32_t *args, uint32_t length) override;
 		bool propogate_ispc_varyings_for_builtins();

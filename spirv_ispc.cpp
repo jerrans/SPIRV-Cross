@@ -743,7 +743,11 @@ void CompilerISPC::emit_header()
 	std::tm localTime;
 	std::time_t result = std::time(nullptr);
 
+#ifdef _WIN32
 	localtime_s(&localTime, &result);
+#else
+	localtime_r(&result, &localTime);
+#endif
 
 	statement("//");
 	statement("//////////////////////////////");
