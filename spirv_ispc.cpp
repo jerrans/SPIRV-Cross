@@ -3120,8 +3120,7 @@ void CompilerISPC::emit_stdlib()
 	{
 		for (const string &v : std::vector<string>{ "uniform", "varying" })
 		{
-			for (const string &t2 :
-			     std::vector<string>{ "float", "int" }) //"bool" There seems to be an issue with bools
+			for (const string &t2 : std::vector<string>{ "float", "int", "bool" })
 			{
 				std::string op1 = join("static SPIRV_INLINE const ", v, " ", t, " ", t, "_cast(const ", v, " ", t2,
 				                       "& a) { return (const ", v, " ", t, ") a; }");
