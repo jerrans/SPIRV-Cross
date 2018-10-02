@@ -386,6 +386,7 @@ string CompilerISPC::compile()
 	backend.flexible_member_array_supported = false;
 	backend.explicit_struct_type = true;
 	backend.use_initializer_list = true;
+	backend.supports_native_swizzle = false;
 	backend.stdlib_filename = "spirvcross_stdlib.ispc";
 
 	update_active_builtins();
@@ -1103,7 +1104,7 @@ void CompilerISPC::emit_instruction(const Instruction &instruction)
 		auto &type0 = expression_type(vec0);
 
 		// Force ISPC to shuffle.
-		bool shuffle = true;
+		bool shuffle = !backend.supports_native_swizzle;
 		/*		
         for (uint32_t i = 0; i < length; i++)
 			if (elems[i] >= type0.vecsize)

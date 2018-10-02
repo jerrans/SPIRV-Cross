@@ -383,6 +383,7 @@ protected:
 		bool allow_truncated_access_chain = false;
 		bool supports_extensions = false;
 		bool supports_empty_struct = false;
+		bool supports_native_swizzle = true; // Used in build_composite_combiner to generate swizzles
 		std::string stdlib_filename = "sprivcross_stdlib";
 	} backend;
 
