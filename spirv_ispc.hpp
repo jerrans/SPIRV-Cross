@@ -147,6 +147,7 @@ private:
 	void emit_stdlib();
 	void emit_struct(SPIRType &type);
 	void emit_specialization_constants();
+	void emit_workgroup_variables();
 
 	bool maybe_emit_array_assignment(uint32_t id_lhs, uint32_t id_rhs);
 
@@ -171,8 +172,8 @@ private:
 
 	void localize_global_variables();
 	std::string ensure_valid_name(std::string name, std::string pfx);
-	std::string entry_point_args(bool append_comma, bool want_builtins);
-	std::string entry_point_args_init(bool append_comma, bool want_builtins);
+	std::string entry_point_args(bool append_comma, bool want_builtins, bool want_workgroup_vars);
+	std::string entry_point_args_init(bool append_comma);
 	void find_entry_point_args();
 	std::string layout_for_member(const SPIRType &type, uint32_t index) override;
 	bool optimize_read_modify_write(const std::string &, const std::string &)
@@ -185,6 +186,7 @@ private:
 	std::vector<std::string> resource_entry_arguments_init;
 
 	std::vector<Variant *> entry_point_ids;
+	std::vector<Variant *> workgroup_variable_ids;
 
 	std::string impl_type;
 	std::string resource_type;

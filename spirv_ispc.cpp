@@ -80,7 +80,7 @@ void CompilerISPC::emit_shared(const SPIRVariable &var)
 {
 	add_resource_name(var.self);
 
-	auto instance_name = to_name(var.self);
+	statement(CompilerGLSL::variable_decl(var), ";");
 }
 
 void CompilerISPC::emit_uniform(const SPIRVariable &var)
@@ -340,7 +340,7 @@ void CompilerISPC::emit_resources()
 		auto &var = get<SPIRVariable>(global);
 		if (var.storage == StorageClassWorkgroup)
 		{
-			emit_shared(var);
+			//			emit_shared(var);
 		}
 		else if (var.storage == StorageClassPrivate)
 		{
@@ -353,6 +353,19 @@ void CompilerISPC::emit_resources()
 	statement("//////////////////////////////");
 	statement("// Shader Code");
 	statement("//////////////////////////////");
+}
+
+void CompilerISPC::emit_workgroup_variables()
+{
+	// Emit workgroup variables.
+	for (auto global : global_variables)
+	{
+		auto &var = get<SPIRVariable>(global);
+		if (var.storage == StorageClassWorkgroup)
+		{
+			emit_shared(var);
+		}
+	}
 }
 
 // Start looking for the varying variables.
@@ -448,7 +461,7 @@ void CompilerISPC::emit_ispc_main()
 		// Dispatch all
 		{
 			string decl = "export void " + entry_point_name + "_dispatch_all" + t + "(uniform int work_groups[3]";
-			string args = entry_point_args(!get<SPIRFunction>(entry_point).arguments.empty(), false);
+			string args = entry_point_args(!get<SPIRFunction>(entry_point).arguments.empty(), false, false);
 			if (!args.empty())
 				decl = join(decl, ", ", args);
 			decl += ")";
@@ -472,6 +485,8 @@ void CompilerISPC::emit_ispc_main()
 					{
 						begin_scope();
 						statement("uniform int3 gl_WorkGroupID = int3(x, y, z);"); //
+						emit_workgroup_variables();
+
 						statement("");
 						statement("// Vectorise the workgroup");
 						if (execution.workgroup_size.z > 1)
@@ -505,7 +520,7 @@ void CompilerISPC::emit_ispc_main()
 
 							string decl = entry_point_name;
 							decl += "_ispc_main(";
-							decl += entry_point_args_init(!get<SPIRFunction>(entry_point).arguments.empty(), true);
+							decl += entry_point_args_init(!get<SPIRFunction>(entry_point).arguments.empty());
 							decl += ");";
 							statement(decl);
 							end_scope();
@@ -524,7 +539,7 @@ void CompilerISPC::emit_ispc_main()
 		{
 			string decl = "export void " + entry_point_name + "_dispatch_single" + t +
 			              "(uniform int work_group_ID[3], uniform int work_groups[3]";
-			string args = entry_point_args(!get<SPIRFunction>(entry_point).arguments.empty(), false);
+			string args = entry_point_args(!get<SPIRFunction>(entry_point).arguments.empty(), false, false);
 			if (!args.empty())
 				decl = join(decl, ", ", args);
 			decl += ")";
@@ -534,6 +549,7 @@ void CompilerISPC::emit_ispc_main()
 			begin_scope();
 			statement("uniform int3 gl_NumWorkGroups = int3(work_groups[0], work_groups[1], work_groups[2]);");
 			statement("uniform int3 gl_WorkGroupID = int3(work_group_ID[0], work_group_ID[1], work_group_ID[2]);");
+			emit_workgroup_variables();
 			statement("");
 			statement("// Vectorise the workgroup");
 			if (execution.workgroup_size.z > 1)
@@ -565,7 +581,7 @@ void CompilerISPC::emit_ispc_main()
 
 				string decl = entry_point_name;
 				decl += "_ispc_main(";
-				decl += entry_point_args_init(!get<SPIRFunction>(entry_point).arguments.empty(), true);
+				decl += entry_point_args_init(!get<SPIRFunction>(entry_point).arguments.empty());
 				decl += ");";
 				statement(decl);
 
@@ -613,7 +629,7 @@ void CompilerISPC::emit_function_prototype(SPIRFunction &func, const Bitset &)
 
 	if (processing_entry_point)
 	{
-		decl += entry_point_args(!func.arguments.empty(), true);
+		decl += entry_point_args(!func.arguments.empty(), true, true);
 	}
 
 	for (auto &arg : func.arguments)
@@ -2057,7 +2073,7 @@ void CompilerISPC::find_entry_point_args()
 					break;
 				}
 			}
-			if (var.storage == StorageClassInput) // && is_builtin_variable(var))
+			if (var.storage == StorageClassInput || var.storage == StorageClassWorkgroup)
 			{
 				entry_point_ids.push_back(&id);
 			}
@@ -2079,7 +2095,7 @@ void CompilerISPC::find_entry_point_args()
 }
 
 // Returns a string containing a comma-delimited list of args for the entry point function
-string CompilerISPC::entry_point_args(bool append_comma, bool want_builtins)
+string CompilerISPC::entry_point_args(bool append_comma, bool want_builtins, bool want_workgroup_vars)
 {
 	find_entry_point_args();
 
@@ -2119,7 +2135,8 @@ string CompilerISPC::entry_point_args(bool append_comma, bool want_builtins)
 				break;
 			}
 		}
-		if (var.storage == StorageClassInput)
+		bool workgroup_var = (var.storage == StorageClassWorkgroup);
+		if (var.storage == StorageClassInput || workgroup_var)
 		{
 			if (is_builtin_variable(var) && want_builtins)
 			{
@@ -2137,8 +2154,15 @@ string CompilerISPC::entry_point_args(bool append_comma, bool want_builtins)
 				}
 			}
 
+			if (workgroup_var)
+			{
+				meta[var_id].decoration.ispc_varying = false;
+			}
+
 			bool add_arg = true;
 			if (is_builtin_variable(var) && !want_builtins)
+				add_arg = false;
+			if (workgroup_var && !want_workgroup_vars)
 				add_arg = false;
 
 			if (add_arg)
@@ -2146,7 +2170,15 @@ string CompilerISPC::entry_point_args(bool append_comma, bool want_builtins)
 				string varying = meta[var_id].decoration.ispc_varying ? "varying " : "uniform ";
 				if (!ep_args.empty())
 					ep_args += ", ";
-				ep_args += varying + type_to_glsl(type, var_id) + " " + to_expression(var_id);
+
+				// Need to ensure that workgroup arrays are passed as pointers/references.
+				// TODO : Ensure these are correctly passed to other functions if required...
+				if (is_array(type))
+					ep_args += varying + type_to_glsl(type, var_id) + "* " + to_expression(var_id);
+				else if (workgroup_var) // Need passing by reference
+					ep_args += varying + type_to_glsl(type, var_id) + "& " + to_expression(var_id);
+				else
+					ep_args += varying + type_to_glsl(type, var_id) + " " + to_expression(var_id);
 			}
 		}
 	}
@@ -2157,7 +2189,7 @@ string CompilerISPC::entry_point_args(bool append_comma, bool want_builtins)
 	return ep_args;
 }
 
-string CompilerISPC::entry_point_args_init(bool append_comma, bool)
+string CompilerISPC::entry_point_args_init(bool append_comma)
 {
 	find_entry_point_args();
 
@@ -2198,7 +2230,8 @@ string CompilerISPC::entry_point_args_init(bool append_comma, bool)
 			}
 		}
 		// input should get builtins and runtime arrays
-		if (var.storage == StorageClassInput) // && is_builtin_variable(var) && want_builtins)
+		if (var.storage == StorageClassInput ||
+		    var.storage == StorageClassWorkgroup) // && is_builtin_variable(var) && want_builtins)
 		{
 			if (!ep_args.empty())
 				ep_args += ", ";
