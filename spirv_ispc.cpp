@@ -1044,7 +1044,34 @@ void CompilerISPC::emit_instruction(const Instruction &instruction)
 		// If the base is immutable, the access chain pointer must also be.
 		// If an expression is mutable and forwardable, we speculate that it is immutable.
 		bool need_transpose;
-		auto e = access_chain(ops[2], &ops[3], length - 3, get<SPIRType>(ops[0]), &need_transpose);
+	std:
+		string e;
+
+		// If the index is a constant, then it could be a uniform or a varying constant, depending on the varying-ness of the access chain.
+		// If it is a varying, then we simply pass in the varying constant instead of the uniform one.
+		// Under the hood, this will be cast to a varying value
+		if (meta[ops[1]].decoration.ispc_varying)
+		{
+			// search for a constant
+			// The ops are const, so copy into a non const array to allow us to modify them.
+			assert((length - 3) < 8);
+			uint32_t ops3[8] = { 0 };
+			uint32_t new_length = length - 3;
+			for (uint32_t ii = 0; ii < new_length; ii++)
+			{
+				ops3[ii] = ops[3 + ii];
+				auto c = maybe_get<SPIRConstant>(ops[3 + ii]);
+				if (c && (c->varying_constant_id != -1))
+					ops3[ii] = c->varying_constant_id;
+				else
+					ops3[ii] = ops[3 + ii];
+			}
+			e = access_chain(ops[2], ops3, new_length, get<SPIRType>(ops[0]), &need_transpose);
+		}
+		else
+		{
+			e = access_chain(ops[2], &ops[3], length - 3, get<SPIRType>(ops[0]), &need_transpose);
+		}
 		auto &expr = set<SPIRExpression>(ops[1], move(e), ops[0], should_forward(ops[2]));
 		expr.loaded_from = ops[2];
 		expr.need_transpose = need_transpose;
@@ -1384,10 +1411,32 @@ bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *
 			// Access chains need to be 2-way as they are simply indirections.
 			// But, if the src is a global passed in by the user, then we don't as they are always uniform
 			// but perhaps with varying runtime arrays.
-			auto *var = compiler.maybe_get<SPIRVariable>(args[i]);
-			if (var && var->storage == StorageClassFunction)
 			{
-				add_dependancies(args[i], args[1]);
+				auto *var = compiler.maybe_get<SPIRVariable>(args[i]);
+				if (var && var->storage == StorageClassFunction)
+				{
+					add_dependancies(args[i], args[1]);
+				}
+			}
+
+			// A constant index may need flagging as a varying
+			{
+				auto *var = compiler.maybe_get<SPIRConstant>(args[i]);
+				if (var)
+				{
+					if (var->varying_constant_id == -1)
+					{
+						// Create a new ID which is a varying and assign it here
+						uint32_t next_id = compiler.increase_bound_by(1);
+						compiler.set<SPIRConstant>(next_id, var->constant_type, var->m.c[0].r[0].u32,
+						                           var->specialization);
+						var->varying_constant_id = next_id;
+
+						// Ensure the existing variable has all the same meta info and is flagged as a varying
+						compiler.meta[next_id] = compiler.meta[args[i]];
+						compiler.meta[next_id].decoration.ispc_varying = true;
+					}
+				}
 			}
 		}
 

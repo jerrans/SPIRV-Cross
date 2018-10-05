@@ -2969,6 +2969,7 @@ string CompilerGLSL::constant_expression_vector(const SPIRConstant &c, uint32_t 
 	string res;
 	bool splat = backend.use_constructor_splatting && c.vector_size() > 1;
 	bool swizzle_splat = backend.can_swizzle_scalar && c.vector_size() > 1;
+	bool is_ispc_varying = meta[c.self].decoration.ispc_varying;
 
 	if (!type_is_floating_point(type))
 	{
@@ -3017,6 +3018,13 @@ string CompilerGLSL::constant_expression_vector(const SPIRConstant &c, uint32_t 
 				}
 			}
 		}
+	}
+
+	// This ISPC code should not be in the GLSL compiler, but this function was sufficiently complex enough that
+	// it warranted making the small mod here rather than copying the function. Could abstract into some form of vector qualifier...?
+	if (is_ispc_varying && !(splat || swizzle_splat))
+	{
+		res += join("(varying ", type_to_glsl(type, 0), ")");
 	}
 
 	if (c.vector_size() > 1 && !swizzle_splat)
