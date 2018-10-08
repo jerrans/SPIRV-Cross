@@ -80,7 +80,7 @@ void CompilerISPC::emit_shared(const SPIRVariable &var)
 {
 	add_resource_name(var.self);
 
-	auto instance_name = to_name(var.self);
+	statement(CompilerGLSL::variable_decl(var), ";");
 }
 
 void CompilerISPC::emit_uniform(const SPIRVariable &var)
@@ -340,7 +340,7 @@ void CompilerISPC::emit_resources()
 		auto &var = get<SPIRVariable>(global);
 		if (var.storage == StorageClassWorkgroup)
 		{
-			emit_shared(var);
+			//			emit_shared(var);
 		}
 		else if (var.storage == StorageClassPrivate)
 		{
@@ -353,6 +353,19 @@ void CompilerISPC::emit_resources()
 	statement("//////////////////////////////");
 	statement("// Shader Code");
 	statement("//////////////////////////////");
+}
+
+void CompilerISPC::emit_workgroup_variables()
+{
+	// Emit workgroup variables.
+	for (auto global : global_variables)
+	{
+		auto &var = get<SPIRVariable>(global);
+		if (var.storage == StorageClassWorkgroup)
+		{
+			emit_shared(var);
+		}
+	}
 }
 
 // Start looking for the varying variables.
@@ -386,6 +399,7 @@ string CompilerISPC::compile()
 	backend.flexible_member_array_supported = false;
 	backend.explicit_struct_type = true;
 	backend.use_initializer_list = true;
+	backend.supports_native_swizzle = false;
 	backend.stdlib_filename = "spirvcross_stdlib.ispc";
 
 	update_active_builtins();
@@ -447,7 +461,7 @@ void CompilerISPC::emit_ispc_main()
 		// Dispatch all
 		{
 			string decl = "export void " + entry_point_name + "_dispatch_all" + t + "(uniform int work_groups[3]";
-			string args = entry_point_args(!get<SPIRFunction>(entry_point).arguments.empty(), false);
+			string args = entry_point_args(!get<SPIRFunction>(entry_point).arguments.empty(), false, false);
 			if (!args.empty())
 				decl = join(decl, ", ", args);
 			decl += ")";
@@ -471,6 +485,8 @@ void CompilerISPC::emit_ispc_main()
 					{
 						begin_scope();
 						statement("uniform int3 gl_WorkGroupID = int3(x, y, z);"); //
+						emit_workgroup_variables();
+
 						statement("");
 						statement("// Vectorise the workgroup");
 						if (execution.workgroup_size.z > 1)
@@ -504,7 +520,7 @@ void CompilerISPC::emit_ispc_main()
 
 							string decl = entry_point_name;
 							decl += "_ispc_main(";
-							decl += entry_point_args_init(!get<SPIRFunction>(entry_point).arguments.empty(), true);
+							decl += entry_point_args_init(!get<SPIRFunction>(entry_point).arguments.empty());
 							decl += ");";
 							statement(decl);
 							end_scope();
@@ -523,7 +539,7 @@ void CompilerISPC::emit_ispc_main()
 		{
 			string decl = "export void " + entry_point_name + "_dispatch_single" + t +
 			              "(uniform int work_group_ID[3], uniform int work_groups[3]";
-			string args = entry_point_args(!get<SPIRFunction>(entry_point).arguments.empty(), false);
+			string args = entry_point_args(!get<SPIRFunction>(entry_point).arguments.empty(), false, false);
 			if (!args.empty())
 				decl = join(decl, ", ", args);
 			decl += ")";
@@ -533,6 +549,7 @@ void CompilerISPC::emit_ispc_main()
 			begin_scope();
 			statement("uniform int3 gl_NumWorkGroups = int3(work_groups[0], work_groups[1], work_groups[2]);");
 			statement("uniform int3 gl_WorkGroupID = int3(work_group_ID[0], work_group_ID[1], work_group_ID[2]);");
+			emit_workgroup_variables();
 			statement("");
 			statement("// Vectorise the workgroup");
 			if (execution.workgroup_size.z > 1)
@@ -564,7 +581,7 @@ void CompilerISPC::emit_ispc_main()
 
 				string decl = entry_point_name;
 				decl += "_ispc_main(";
-				decl += entry_point_args_init(!get<SPIRFunction>(entry_point).arguments.empty(), true);
+				decl += entry_point_args_init(!get<SPIRFunction>(entry_point).arguments.empty());
 				decl += ");";
 				statement(decl);
 
@@ -612,7 +629,7 @@ void CompilerISPC::emit_function_prototype(SPIRFunction &func, const Bitset &)
 
 	if (processing_entry_point)
 	{
-		decl += entry_point_args(!func.arguments.empty(), true);
+		decl += entry_point_args(!func.arguments.empty(), true, true);
 	}
 
 	for (auto &arg : func.arguments)
@@ -1027,7 +1044,33 @@ void CompilerISPC::emit_instruction(const Instruction &instruction)
 		// If the base is immutable, the access chain pointer must also be.
 		// If an expression is mutable and forwardable, we speculate that it is immutable.
 		bool need_transpose;
-		auto e = access_chain(ops[2], &ops[3], length - 3, get<SPIRType>(ops[0]), &need_transpose);
+		string e;
+
+		// If the index is a constant, then it could be a uniform or a varying constant, depending on the varying-ness of the access chain.
+		// If it is a varying, then we simply pass in the varying constant instead of the uniform one.
+		// Under the hood, this will be cast to a varying value
+		if (meta[ops[1]].decoration.ispc_varying)
+		{
+			// search for a constant
+			// The ops are const, so copy into a non const array to allow us to modify them.
+			assert((length - 3) < 8);
+			uint32_t ops3[8] = { 0 };
+			uint32_t new_length = length - 3;
+			for (uint32_t ii = 0; ii < new_length; ii++)
+			{
+				ops3[ii] = ops[3 + ii];
+				auto c = maybe_get<SPIRConstant>(ops[3 + ii]);
+				if (c && (c->varying_constant_id != -1))
+					ops3[ii] = c->varying_constant_id;
+				else
+					ops3[ii] = ops[3 + ii];
+			}
+			e = access_chain(ops[2], ops3, new_length, get<SPIRType>(ops[0]), &need_transpose);
+		}
+		else
+		{
+			e = access_chain(ops[2], &ops[3], length - 3, get<SPIRType>(ops[0]), &need_transpose);
+		}
 		auto &expr = set<SPIRExpression>(ops[1], move(e), ops[0], should_forward(ops[2]));
 		expr.loaded_from = ops[2];
 		expr.need_transpose = need_transpose;
@@ -1103,7 +1146,7 @@ void CompilerISPC::emit_instruction(const Instruction &instruction)
 		auto &type0 = expression_type(vec0);
 
 		// Force ISPC to shuffle.
-		bool shuffle = true;
+		bool shuffle = !backend.supports_native_swizzle;
 		/*		
         for (uint32_t i = 0; i < length; i++)
 			if (elems[i] >= type0.vecsize)
@@ -1264,6 +1307,16 @@ void CompilerISPC::emit_instruction(const Instruction &instruction)
 		meta[id1].decoration.runtime_array_length_id = runtime_array_length_id;
 		break;
 	}
+	case OpControlBarrier:
+	case OpMemoryBarrier:
+	{
+		if (!ignore_group_barriers)
+			SPIRV_CROSS_THROW("Barriers are not currently supported by the ISPC backend. Use the option "
+			                  "--ispc-ignore-group-barriers to ignore.");
+		else
+			statement("// barrier(); // Not currently supported");
+		break;
+	}
 	default:
 		CompilerGLSL::emit_instruction(instruction);
 		break;
@@ -1367,10 +1420,32 @@ bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *
 			// Access chains need to be 2-way as they are simply indirections.
 			// But, if the src is a global passed in by the user, then we don't as they are always uniform
 			// but perhaps with varying runtime arrays.
-			auto *var = compiler.maybe_get<SPIRVariable>(args[i]);
-			if (var && var->storage == StorageClassFunction)
 			{
-				add_dependancies(args[i], args[1]);
+				auto *var = compiler.maybe_get<SPIRVariable>(args[i]);
+				if (var && var->storage == StorageClassFunction)
+				{
+					add_dependancies(args[i], args[1]);
+				}
+			}
+
+			// A constant index may need flagging as a varying
+			{
+				auto *var = compiler.maybe_get<SPIRConstant>(args[i]);
+				if (var)
+				{
+					if (var->varying_constant_id == -1)
+					{
+						// Create a new ID which is a varying and assign it here
+						uint32_t next_id = compiler.increase_bound_by(1);
+						compiler.set<SPIRConstant>(next_id, var->constant_type, var->m.c[0].r[0].u32,
+						                           var->specialization);
+						var->varying_constant_id = next_id;
+
+						// Ensure the existing variable has all the same meta info and is flagged as a varying
+						compiler.meta[next_id] = compiler.meta[args[i]];
+						compiler.meta[next_id].decoration.ispc_varying = true;
+					}
+				}
 			}
 		}
 
@@ -2056,7 +2131,7 @@ void CompilerISPC::find_entry_point_args()
 					break;
 				}
 			}
-			if (var.storage == StorageClassInput) // && is_builtin_variable(var))
+			if (var.storage == StorageClassInput || var.storage == StorageClassWorkgroup)
 			{
 				entry_point_ids.push_back(&id);
 			}
@@ -2078,7 +2153,7 @@ void CompilerISPC::find_entry_point_args()
 }
 
 // Returns a string containing a comma-delimited list of args for the entry point function
-string CompilerISPC::entry_point_args(bool append_comma, bool want_builtins)
+string CompilerISPC::entry_point_args(bool append_comma, bool want_builtins, bool want_workgroup_vars)
 {
 	find_entry_point_args();
 
@@ -2118,7 +2193,8 @@ string CompilerISPC::entry_point_args(bool append_comma, bool want_builtins)
 				break;
 			}
 		}
-		if (var.storage == StorageClassInput)
+		bool workgroup_var = (var.storage == StorageClassWorkgroup);
+		if (var.storage == StorageClassInput || workgroup_var)
 		{
 			if (is_builtin_variable(var) && want_builtins)
 			{
@@ -2136,8 +2212,15 @@ string CompilerISPC::entry_point_args(bool append_comma, bool want_builtins)
 				}
 			}
 
+			if (workgroup_var)
+			{
+				meta[var_id].decoration.ispc_varying = false;
+			}
+
 			bool add_arg = true;
 			if (is_builtin_variable(var) && !want_builtins)
+				add_arg = false;
+			if (workgroup_var && !want_workgroup_vars)
 				add_arg = false;
 
 			if (add_arg)
@@ -2145,7 +2228,15 @@ string CompilerISPC::entry_point_args(bool append_comma, bool want_builtins)
 				string varying = meta[var_id].decoration.ispc_varying ? "varying " : "uniform ";
 				if (!ep_args.empty())
 					ep_args += ", ";
-				ep_args += varying + type_to_glsl(type, var_id) + " " + to_expression(var_id);
+
+				// Need to ensure that workgroup arrays are passed as pointers/references.
+				// TODO : Ensure these are correctly passed to other functions if required...
+				if (is_array(type))
+					ep_args += varying + type_to_glsl(type, var_id) + "* " + to_expression(var_id);
+				else if (workgroup_var) // Need passing by reference
+					ep_args += varying + type_to_glsl(type, var_id) + "& " + to_expression(var_id);
+				else
+					ep_args += varying + type_to_glsl(type, var_id) + " " + to_expression(var_id);
 			}
 		}
 	}
@@ -2156,7 +2247,7 @@ string CompilerISPC::entry_point_args(bool append_comma, bool want_builtins)
 	return ep_args;
 }
 
-string CompilerISPC::entry_point_args_init(bool append_comma, bool)
+string CompilerISPC::entry_point_args_init(bool append_comma)
 {
 	find_entry_point_args();
 
@@ -2197,7 +2288,8 @@ string CompilerISPC::entry_point_args_init(bool append_comma, bool)
 			}
 		}
 		// input should get builtins and runtime arrays
-		if (var.storage == StorageClassInput) // && is_builtin_variable(var) && want_builtins)
+		if (var.storage == StorageClassInput ||
+		    var.storage == StorageClassWorkgroup) // && is_builtin_variable(var) && want_builtins)
 		{
 			if (!ep_args.empty())
 				ep_args += ", ";
@@ -3120,8 +3212,7 @@ void CompilerISPC::emit_stdlib()
 	{
 		for (const string &v : std::vector<string>{ "uniform", "varying" })
 		{
-			for (const string &t2 :
-			     std::vector<string>{ "float", "int" }) //"bool" There seems to be an issue with bools
+			for (const string &t2 : std::vector<string>{ "float", "int", "bool" })
 			{
 				std::string op1 = join("static SPIRV_INLINE const ", v, " ", t, " ", t, "_cast(const ", v, " ", t2,
 				                       "& a) { return (const ", v, " ", t, ") a; }");
