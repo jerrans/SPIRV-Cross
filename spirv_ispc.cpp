@@ -1044,7 +1044,6 @@ void CompilerISPC::emit_instruction(const Instruction &instruction)
 		// If the base is immutable, the access chain pointer must also be.
 		// If an expression is mutable and forwardable, we speculate that it is immutable.
 		bool need_transpose;
-	std:
 		string e;
 
 		// If the index is a constant, then it could be a uniform or a varying constant, depending on the varying-ness of the access chain.
@@ -1306,6 +1305,16 @@ void CompilerISPC::emit_instruction(const Instruction &instruction)
 		set<SPIRExpression>(id1, name, result_type, true);
 		// Store the ID as decoration so we can pick it up for the entry_point propogation
 		meta[id1].decoration.runtime_array_length_id = runtime_array_length_id;
+		break;
+	}
+	case OpControlBarrier:
+	case OpMemoryBarrier:
+	{
+		if (!ignore_group_barriers)
+			SPIRV_CROSS_THROW("Barriers are not currently supported by the ISPC backend. Use the option "
+			                  "--ispc-ignore-group-barriers to ignore.");
+		else
+			statement("// barrier(); // Not currently supported");
 		break;
 	}
 	default:

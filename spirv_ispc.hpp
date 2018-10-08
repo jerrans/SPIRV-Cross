@@ -78,6 +78,12 @@ public:
 		ignore_runtimearray_padding = true;
 	}
 
+	// Group Syncs and Group Barriers are not currently supported by ISPC, so ignore them
+	void set_ignore_group_barriers()
+	{
+		ignore_group_barriers = true;
+	}
+
 protected:
 	// Specifically for the ISPC compiler
 	// Look for potential targets to vectorise
@@ -196,6 +202,7 @@ private:
 
 	bool debug = false;
 	bool ignore_runtimearray_padding = false;
+	bool ignore_group_barriers = false;
 
 	// stdlib codegen
 	void codegen_constructor(std::string type, bool varying, uint32_t width, uint32_t arg_count, uint32_t arg_width[4]);

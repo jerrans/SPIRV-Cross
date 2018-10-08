@@ -477,6 +477,7 @@ struct CLIArguments
 	bool yflip = false;
 	bool sso = false;
 	bool ispc_ignore_runtimearray_padding = false;
+	bool ispc_ignore_group_barriers = false;
 	vector<PLSArg> pls_in;
 	vector<PLSArg> pls_out;
 	vector<Remap> remaps;
@@ -535,6 +536,7 @@ static void print_help()
 	                "\t[--ispc]\n"
 	                "\t[--ispc-interface-name]\n"
 	                "\t[--ispc-ignore-runtimearray-padding]\n"
+	                "\t[--ispc-ignore-group-barriers]\n"
 	                "\t[--separate-shader-objects]\n"
 	                "\t[--pls-in format input-name]\n"
 	                "\t[--pls-out format output-name]\n"
@@ -697,6 +699,7 @@ static int main_inner(int argc, char *argv[])
 	cbs.add("--ispc-interface-name", [&args](CLIParser &parser) { args.ispc_interface_name = parser.next_string(); });
 	cbs.add("--ispc-ignore-runtimearray-padding",
 	        [&args](CLIParser &) { args.ispc_ignore_runtimearray_padding = true; });
+	cbs.add("--ispc-ignore-group-barriers", [&args](CLIParser &) { args.ispc_ignore_group_barriers = true; });
 	cbs.add("--vulkan-semantics", [&args](CLIParser &) { args.vulkan_semantics = true; });
 	cbs.add("--flatten-multidimensional-arrays", [&args](CLIParser &) { args.flatten_multidimensional_arrays = true; });
 	cbs.add("--no-420pack-extension", [&args](CLIParser &) { args.use_420pack_extension = false; });
@@ -832,6 +835,8 @@ static int main_inner(int argc, char *argv[])
 			static_cast<CompilerISPC *>(compiler.get())->set_debug();
 		if (args.ispc_ignore_runtimearray_padding)
 			static_cast<CompilerISPC *>(compiler.get())->set_ignore_runtimearray_padding();
+		if (args.ispc_ignore_group_barriers)
+			static_cast<CompilerISPC *>(compiler.get())->set_ignore_group_barriers();
 	}
 	else
 	{
