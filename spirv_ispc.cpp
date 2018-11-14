@@ -1060,7 +1060,7 @@ void CompilerISPC::emit_instruction(const Instruction &instruction)
 			{
 				ops3[ii] = ops[3 + ii];
 				auto c = maybe_get<SPIRConstant>(ops[3 + ii]);
-				if (c && (c->varying_constant_id != -1))
+				if (c && ((int)c->varying_constant_id != -1))
 					ops3[ii] = c->varying_constant_id;
 				else
 					ops3[ii] = ops[3 + ii];
@@ -1433,7 +1433,7 @@ bool CompilerISPC::VectorisationHandler::handle(spv::Op opcode, const uint32_t *
 				auto *var = compiler.maybe_get<SPIRConstant>(args[i]);
 				if (var)
 				{
-					if (var->varying_constant_id == -1)
+					if ((int)var->varying_constant_id == -1)
 					{
 						// Create a new ID which is a varying and assign it here
 						uint32_t next_id = compiler.increase_bound_by(1);
