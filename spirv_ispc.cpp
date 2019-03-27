@@ -2676,7 +2676,7 @@ void CompilerISPC::codegen_constructor(std::string type, bool varying, uint32_t 
 		}
 
 		// Create list initialiser
-		string init;
+		string initialiser;
 		uint32_t required_initialisers = 0;
 		while (required_initialisers < width)
 		{
@@ -2686,16 +2686,16 @@ void CompilerISPC::codegen_constructor(std::string type, bool varying, uint32_t 
 				{
 					required_initialisers++;
 
-					init += arg_names[ac];
+					initialiser += arg_names[ac];
 					if (arg_width[ac] > 1)
-						init += arg_swizzles[aw];
+						initialiser += arg_swizzles[aw];
 					if (required_initialisers < width)
-						init += ", ";
+						initialiser += ", ";
 				}
 			}
 		}
 		statement("static SPIRV_INLINE ", v, type, width, " ", type, width, "_init(", args, " ) { ", v, type, width,
-		          " ret = { ", init, " }; return ret; }");
+		          " ret = { ", initialiser, " }; return ret; }");
 	}
 }
 
@@ -2719,22 +2719,22 @@ void CompilerISPC::codegen_cast_constructor(std::string src_type, std::string ds
 	args += join(" a"); // varying const float2& a
 
 	// Create list initialiser
-	string init;
+	string initialiser;
 	uint32_t required_initialisers = 0;
 	while (required_initialisers < width)
 	{
 		for (uint32_t aw = 0; aw < width; aw++)
 		{
 			required_initialisers++;
-			init += join(" (", v, dst_type, ")a");
+			initialiser += join(" (", v, dst_type, ")a");
 			if (width > 1)
-				init += arg_swizzles[aw];
+				initialiser += arg_swizzles[aw];
 			if (required_initialisers < width)
-				init += ", ";
+				initialiser += ", ";
 		}
 	}
 	statement("static SPIRV_INLINE ", v, dst_type, width, " ", dst_type, width, "_init(", args, " ) { ", v, dst_type,
-	          width, " ret = { ", init, " }; return ret; }");
+	          width, " ret = { ", initialiser, " }; return ret; }");
 }
 
 // varyings/vector widths are : return, arg1, arg2, arg3
